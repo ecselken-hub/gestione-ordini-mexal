@@ -13,7 +13,9 @@
         </div>
         
         <div class="card mb-4">
-            <div class="card-header"><h3>Dati Cliente</h3></div>
+            <div class="card-header">
+                <h3>Dati Cliente</h3>
+            </div>
             <div class="card-body">
                 <p><strong>Ragione Sociale:</strong> {{ order.ragione_sociale }}</p>
                 <p><strong>Indirizzo:</strong> {{ order.indirizzo }}</p>
@@ -21,13 +23,22 @@
         </div>
 
         <div class="card">
-            <div class="card-header"><h3>Gestione Picking e Controllo</h3></div>
+            <div class="card-header">
+                <h3>Gestione Picking e Controllo</h3>
+            </div>
             <div class="card-body">
-                <p>Stato Attuale: <strong>{{ state.status }}</strong></p>
+                <p>Stato Attuale: 
+                    <strong class="
+                        {% if state.status == 'In Picking' %} text-primary
+                        {% elif state.status == 'In Controllo' %} text-warning
+                        {% elif state.status == 'Completato' %} text-success
+                        {% else %} text-secondary {% endif %}">
+                        {{ state.status }}
+                    </strong>
+                </p>
                 <hr>
                 
                 <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
-                    <input type="hidden" name="order_numero" value="{{ order.numero }}">
                     <table class="table table-bordered">
                         <thead>
                             <tr>
@@ -38,14 +49,13 @@
                             </tr>
                         </thead>
                         <tbody>
+                            {# Usiamo i nomi dei campi dedotti dallo script di Google Sheets #}
                             {% if order.righe %}
                                 {% for item in order.righe %}
                                 <tr>
-                                    {# --- CORREZIONE FINALE QUI --- #}
-                                    <td>{{ item.codice_articolo }}</td>      {# Corretto #}
-                                    <td>{{ item.descr_articolo }}</td>       {# Corretto da 'descrizione' #}
-                                    <td><strong>{{ item.quantita }}</strong></td> {# Corretto da 'qta' #}
-                                    {# ----------------------------- #}
+                                    <td>{{ item.codice_articolo }}</td>
+                                    <td>{{ item.descr_articolo }}</td>
+                                    <td><strong>{{ item.quantita }}</strong></td>
                                     <td>
                                         <input type="number" 
                                                name="picked_{{ item.codice_articolo }}" 
