@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Giri di Consegna</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <style>
+        .route-card {
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Giri di Consegna Ottimizzati</h1>
+            <a href="{{ url_for('trasporto') }}" class="btn btn-secondary">Torna a Assegnazione</a>
+        </div>
+
+        {% if giri_calcolati %}
+            <div class="row">
+                {% for vettore, giro in giri_calcolati.items() %}
+                <div class="col-md-6">
+                    <div class="card route-card">
+                        <div class="card-header bg-dark text-white">
+                            <h3 class="mb-0">🚚 Autista: {{ vettore }}</h3>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Distanza Totale:</strong> {{ giro.distanza_totale }}</p>
+                            <p><strong>Durata Totale (traffico escl.):</strong> {{ giro.durata_totale }}</p>
+                            <hr>
+                            <h5 class="card-title">Ordine delle Tappe:</h5>
+                            <ol class="list-group list-group-numbered">
+                                {% for tappa in giro.tappe_ordinate %}
+                                <li class="list-group-item">
+                                    <strong>{{ tappa.ragione_sociale }}</strong><br>
+                                    <small class="text-muted">{{ tappa.indirizzo }}</small>
+                                </li>
+                                {% endfor %}
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="alert alert-warning" role="alert">
+                Nessun giro da calcolare. Assegna almeno un ordine a un autista nella pagina di trasporto.
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

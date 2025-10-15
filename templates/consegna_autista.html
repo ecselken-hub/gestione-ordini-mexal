@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Giro di Consegna - {{ autista_nome }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Giro di {{ autista_nome }}</h1>
+            <a href="{{ url_for('autisti') }}" class="btn btn-secondary">Cambia Autista</a>
+        </div>
+
+        {% if tappe %}
+            <ol class="list-group list-group-numbered">
+                {% for tappa in tappe %}
+                <li class="list-group-item d-flex justify-content-between align-items-start p-3">
+                    <div class="ms-2 me-auto">
+                        <div class="fw-bold fs-5">{{ tappa.ragione_sociale }}</div>
+                        <span class="text-muted">{{ tappa.indirizzo }}, {{ tappa.localita }}</span>
+                        
+                        {% if tappa.start_time %}
+                            <div class="mt-2">
+                                <span class="badge bg-primary">Inizio: {{ tappa.start_time }}</span>
+                                {% if tappa.end_time %}
+                                    <span class="badge bg-success">Fine: {{ tappa.end_time }}</span>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="d-flex align-items-center" style="height: 100%;">
+                        {% if not tappa.start_time %}
+                            <form action="{{ url_for('start_consegna') }}" method="POST">
+                                <input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}">
+                                <input type="hidden" name="autista_nome" value="{{ autista_nome }}">
+                                <button type="submit" class="btn btn-primary">Inizia</button>
+                            </form>
+                        {% elif not tappa.end_time %}
+                            <form action="{{ url_for('end_consegna') }}" method="POST">
+                                <input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}">
+                                <input type="hidden" name="autista_nome" value="{{ autista_nome }}">
+                                <button type="submit" class="btn btn-success">Fine</button>
+                            </form>
+                        {% else %}
+                            <span class="badge bg-light text-dark">Completato</span>
+                        {% endif %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+        {% else %}
+            <div class="alert alert-info">Nessuna consegna assegnata a questo autista per oggi.</div>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -39,3 +39,31 @@ def mx_call_api(endpoint, method='GET', data=None):
         if e.response is not None:
             print(f"!!! DETTAGLIO ERRORE DAL SERVER: {e.response.text} !!!")
         return None
+
+def get_vettori():
+    """
+    Recupera la lista di tutti i fornitori (che usiamo come vettori)
+    e la filtra per includere solo 'BOXER' e 'EXPERT'.
+    """
+    endpoint = 'risorse/fornitori/ricerca'
+    
+    # 1. Scarichiamo l'intera lista di fornitori, come prima.
+    response = mx_call_api(endpoint, method='POST', data={'Filtri': []})
+    
+    if response and response.get('dati'):
+        tutti_i_fornitori = response['dati']
+        vettori_filtrati = []
+        
+        # 2. Creiamo una lista dei nomi che vogliamo includere.
+        nomi_da_includere = ["BOXER", "EXPERT"]
+        
+        # 3. Iteriamo sulla lista completa e selezioniamo solo quelli che ci servono.
+        for fornitore in tutti_i_fornitori:
+            # Controlliamo se la 'ragione_sociale' del fornitore è nella nostra lista.
+            # Usiamo .upper() per ignorare differenze tra maiuscole e minuscole.
+            if fornitore.get('ragione_sociale', '').upper() in nomi_da_includere:
+                vettori_filtrati.append(fornitore)
+                
+        return vettori_filtrati
+        
+    return []
