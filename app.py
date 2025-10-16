@@ -45,10 +45,11 @@ def load_all_data():
         client_data = client_map.get(client_code, {})
         
         order['ragione_sociale'] = client_data.get('ragione_sociale', 'N/D')
-        order['telefono'] = client_data.get('telefono', 'N/D') # Carica il telefono
+        order['telefono'] = client_data.get('telefono', 'N/D')
         
         shipping_address_id = order.get('cod_anag_sped')
         shipping_address_data = get_shipping_address(shipping_address_id) if shipping_address_id else None
+
         if shipping_address_data:
             order['indirizzo'] = shipping_address_data.get('indirizzo', 'N/D')
             order['localita'] = shipping_address_data.get('localita', 'N/D')
@@ -56,14 +57,14 @@ def load_all_data():
             order['indirizzo'] = client_data.get('indirizzo', 'N/D')
             order['localita'] = client_data.get('localita', 'N/D')
 
-        # Carica anche le note dell'ordine
         dati_aggiuntivi = get_dati_aggiuntivi(client_code)
         order['orario1_start'] = dati_aggiuntivi.get('orario1start') 
         order['orario1_end'] = dati_aggiuntivi.get('orario1end')
-        order['nota'] = order.get('nota', '') # Usa la nota presente sull'ordine
+        order['nota'] = order.get('nota', '')
         
         order['pagamento_desc'] = payment_map.get(order.get('id_pagamento'), 'N/D')
-        order['valore_merci'] = order.get('totale_doc', 0.0)
+        order['valore_merci'] = order.get('totale_doc', 0.0) # Lo lasciamo qui per usi futuri, ma non lo mostriamo
+        order['colli_da_api'] = order.get('nr_colli_sped', 0)
         
         order['righe'] = rows_map.get(order_key, [])
         app_data_store["orders"][order_key] = order
@@ -136,7 +137,7 @@ def calcola_giri():
     app_data_store["calculated_routes"] = {}
     for vettore, ordini_assegnati in giri_per_vettore.items():
         if not ordini_assegnati: continue
-
+        
         partenza_prevista = datetime.now().replace(hour=8, minute=0, second=0)
         
         origin = "Japlab, Via Ferraris, 3, 84018 Scafati SA"
@@ -154,7 +155,6 @@ def calcola_giri():
             distanza_complessiva_km = sum(leg['distance']['value'] for leg in route['legs']) / 1000
             durata_complessiva_sec = sum(leg['duration']['value'] for leg in route['legs'])
             rientro_previsto = partenza_prevista + timedelta(seconds=durata_complessiva_sec)
-            valore_totale_giro = sum(o.get('valore_merci', 0) for o in tappe_ordinate_oggetti)
 
             orario_tappa_corrente = partenza_prevista
             for i, leg in enumerate(route['legs'][:-1]):
@@ -169,8 +169,7 @@ def calcola_giri():
                 'km_previsti': f"{distanza_complessiva_km:.1f} km",
                 'tempo_previsto': time.strftime("%Hh %Mm", time.gmtime(durata_complessiva_sec)),
                 'rientro_previsto': rientro_previsto.strftime('%H:%M'),
-                'valore_totale': f"€ {valore_totale_giro:,.2f}".replace(",", "."),
-                'tappe': tappe_ordinate_oggetti, # Ora la lista contiene tutti i dati, incluso l'orario
+                'tappe': tappe_ordinate_oggetti,
                 'efficienza': 'N/D',
                 'consumo_carburante': 'N/D'
             }

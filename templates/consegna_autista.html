@@ -10,26 +10,20 @@
 
 {% if giro %}
     <div class="card">
-        <div class="card-body" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; text-align: center;">
-            <div class="border-end border-bottom p-2">
+        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; text-align: center;">
+            <div class="p-2">
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">DATA</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.data }}</div>
             </div>
-            <div class="border-bottom p-2">
+            <div class="p-2">
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Partenza Max</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.partenza_max }}</div>
             </div>
-             <div class="border-end p-2">
+             <div class="p-2">
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">N° Consegne</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.num_consegne }}</div>
             </div>
-            <div class="p-2">
-                <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Importo Totale</div>
-                <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.valore_totale }}</div>
-            </div>
-        </div>
-        <div class="card-body" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; text-align: center; border-top: 1px solid var(--separator-color);">
-             <div class="border-end p-2">
+             <div class="p-2">
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Km Previsti</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.km_previsti }}</div>
             </div>
@@ -37,13 +31,9 @@
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Tempo Previsto</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.tempo_previsto }}</div>
             </div>
-            <div class="border-end border-top p-2">
+            <div class="p-2">
                 <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Rientro Previsto</div>
                 <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.rientro_previsto }}</div>
-            </div>
-             <div class="border-top p-2">
-                <div style="font-size: 0.8rem; color: var(--secondary-text-color); text-transform: uppercase;">Efficienza</div>
-                <div style="font-size: 1.2rem; font-weight: 600;">{{ giro.efficienza }}</div>
             </div>
         </div>
     </div>
@@ -72,7 +62,6 @@
                     </p>
                     <p style="border-top: 1px solid var(--separator-color); padding-top: 1rem; margin-top: 1rem;">
                         <strong>Pagamento:</strong> {{ tappa.pagamento_desc }}
-                        <br><strong>Valore:</strong> € {{ "%.2f"|format(tappa.valore_merci) }}
                         | <strong>Colli:</strong> {{ tappa.colli_da_consegnare }}
                     </p>
                 </div>
