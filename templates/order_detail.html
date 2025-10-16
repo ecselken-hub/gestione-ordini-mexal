@@ -1,28 +1,21 @@
 {% extends "base.html" %}
 
-{% block title %}Dettagli Ordine {{ order.numero }}{% endblock %}
+{% block title %}Dettaglio Ordine {{ order.numero }}{% endblock %}
 
 {% block content %}
 <div class="header">
     <div>
-        <h1 style="font-size: 2.2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
-        <p style="color: var(--secondary-text-color); margin: 0;">{{ order.ragione_sociale }}</p>
+        <h1 style="font-size: 2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
+        <p style="color: var(--secondary-text-color); margin: 0; font-weight: 500;">{{ order.ragione_sociale }}</p>
     </div>
-    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista degli ordini</a>
+    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a>
 </div>
 
 <div class="card">
-    <div class="card-header">Dati del Cliente</div>
+    <div class="card-header">Stato Picking</div>
     <div class="card-body">
-        <p><strong>Indirizzo di Consegna:</strong> {{ order.indirizzo }}, {{ order.localita }}</p>
-    </div>
-</div>
-
-<div class="card">
-    <div class="card-header">Gestione del Prelievo e del Controllo</div>
-    <div class="card-body">
-        <p style="margin-bottom: 1.5rem;">
-            <span style="color: var(--secondary-text-color); font-weight: 500;">Status Attuale:</span>
+        <p style="margin: 0;">
+            <span style="color: var(--secondary-text-color); font-weight: 500;">Stato Attuale:</span>
             <span class="badge 
                 {% if state.status == 'In Picking' %} bg-primary
                 {% elif state.status == 'In Controllo' %} bg-warning
@@ -31,66 +24,93 @@
                 {{ state.status }}
             </span>
         </p>
-        <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
-            <div class="table-responsive">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Codice articolo</th>
-                            <th>Descrizione</th>
-                            <th>Quantità richiesta</th>
-                            <th>Quantità preparata</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% if order.righe %}
-                            {% for item in order.righe %}
-                            <tr>
-                                <td>{{ item.codice_articolo }}</td>
-                                <td>{{ item.descr_articolo }}</td>
-                                <td>
-                                    <strong>
-                                        {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
-                                            {% set pecas_por_caixa = (item.quantita / item.nr_colli) | int %}
-                                            {{ item.nr_colli }} * {{ pecas_por_caixa }}
-                                        {% else %}
-                                            {{ item.quantita }}
-                                        {% endif %}
-                                    </strong>
-                                </td>
-                                <td>
-                                    <input type="number" name="picked_qty_{{ item.codice_articolo }}" class="form-control" value="{{ state.picked_items.get(item.codice_articolo, '') }}" style="width: 100px;" {% if state.status != 'In Picking' %}readonly{% endif %}>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        {% else %}
-                            <tr><td colspan="4" style="text-align: center; padding: 2rem;">Nessun articolo trovato.</td></tr>
-                        {% endif %}
-                    </tbody>
-                </table>
-            </div>
-            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--separator-color);">
-                {% if state.status == 'Da Lavorare' %}
-                    <button type="submit" name="action" value="start_picking" class="btn btn-primary">Inzio Picking</button>
-                {% elif state.status == 'In Picking' %}
-                    <div style="display: flex; gap: 1rem; align-items: flex-end;">
-                        <div>
-                            <label for="colli_totali_operatore" style="font-weight: 600; margin-bottom: 0.5rem;">Colli Totali:</label>
-                            <input type="number" class="form-control" id="colli_totali_operatore" name="colli_totali_operatore" value="{{ state.colli_totali_operatore or '' }}" style="width: 120px;">
-                        </div>
-                        <button type="submit" name="action" value="complete_picking" class="btn btn-success">Concludi Picking</button>
-                    </div>
-                {% elif state.status == 'In Controllo' %}
-                    <p><strong>Total de Caixas Declaradas: {{ state.colli_totali_operatore }}</strong></p>
-                    <div style="margin-top: 1rem; display: flex; gap: 1rem;">
-                        <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva e Conludi</button>
-                        <button type="submit" name="action" value="reject_order" class="btn btn-danger">Riscontra un Problema</button>
-                    </div>
-                {% elif state.status == 'Completato' %}
-                    <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px;">✔️ Ordine completato.</div>
-                {% endif %}
-            </div>
-        </form>
     </div>
 </div>
+
+<div class="card">
+    <div class="card-header">Articoli da Preparare</div>
+    <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
+        <div class="card-body" style="padding: 0;">
+            {% if order.righe %}
+                {% for item in order.righe %}
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.25rem 1rem; border-bottom: 1px solid var(--separator-color);">
+                    <div style="flex-grow: 1;">
+                        <p style="font-weight: 600; margin: 0 0 4px 0;">{{ item.descr_articolo }}</p>
+                        <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">Cod: {{ item.codice_articolo }}</p>
+                    </div>
+                    
+                    <div style="text-align: center; min-width: 80px;">
+                        <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">Ordinati</div>
+                        <div style="font-weight: 700; font-size: 1.5rem; color: var(--primary-text-color);">
+                            {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
+                                {% set pezzi_per_collo = (item.quantita / item.nr_colli) | int %}
+                                {{ item.nr_colli }} * {{ pezzi_per_collo }}
+                            {% else %}
+                                {{ item.quantita }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <div class="stepper">
+                        <button type="button" class="stepper-btn stepper-minus" {% if state.status != 'In Picking' %}disabled{% endif %}>-</button>
+                        <input type="number" 
+                               id="picked_qty_{{ item.codice_articolo }}"
+                               name="picked_qty_{{ item.codice_articolo }}" 
+                               value="{{ state.picked_items.get(item.codice_articolo, '0') }}"
+                               min="0"
+                               {% if state.status != 'In Picking' %}readonly{% endif %}>
+                        <button type="button" class="stepper-btn stepper-plus" {% if state.status != 'In Picking' %}disabled{% endif %}>+</button>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div style="text-align: center; padding: 2rem;">Nessun articolo trovato.</div>
+            {% endif %}
+        </div>
+        
+        <div style="padding: 1.5rem; background-color: #f9f9f9; border-top: 1px solid var(--separator-color);">
+            {% if state.status == 'Da Lavorare' %}
+                <button type="submit" name="action" value="start_picking" class="btn btn-primary" style="width: 100%;">Avvia Picking</button>
+            {% elif state.status == 'In Picking' %}
+                <div style="display: flex; gap: 1rem; align-items: flex-end;">
+                    <div>
+                        <label for="colli_totali_operatore" style="font-weight: 600; margin-bottom: 0.5rem;">TOTALE COLLI</label>
+                        <input type="number" class="form-control" id="colli_totali_operatore" name="colli_totali_operatore" value="{{ state.colli_totali_operatore or '' }}" style="width: 120px;">
+                    </div>
+                    <button type="submit" name="action" value="complete_picking" class="btn btn-success" style="flex-grow: 1;">Completa Picking</button>
+                </div>
+            {% elif state.status == 'In Controllo' %}
+                <p style="font-size: 1.1rem; margin-top: 0;"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore }}</strong></p>
+                <div style="margin-top: 1rem; display: flex; gap: 1rem;">
+                    <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva Ordine</button>
+                    <button type="submit" name="action" value="reject_order" class="btn btn-danger">Rimanda al Picking</button>
+                </div>
+            {% elif state.status == 'Completato' %}
+                <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px; font-weight: 600; text-align: center;">
+                    ✔️ Ordine Completato
+                </div>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const steppers = document.querySelectorAll('.stepper');
+    steppers.forEach(stepper => {
+        const input = stepper.querySelector('input[type="number"]');
+        const minusBtn = stepper.querySelector('.stepper-minus');
+        const plusBtn = stepper.querySelector('.stepper-plus');
+        if (plusBtn) {
+            plusBtn.addEventListener('click', () => { input.value = parseInt(input.value || 0) + 1; });
+        }
+        if (minusBtn) {
+            minusBtn.addEventListener('click', () => {
+                const currentValue = parseInt(input.value || 0);
+                if (currentValue > 0) { input.value = currentValue - 1; }
+            });
+        }
+    });
+});
+</script>
 {% endblock %}

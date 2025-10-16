@@ -4,6 +4,7 @@ import time
 import os
 import googlemaps
 from datetime import datetime, timedelta
+from collections import OrderedDict
 
 app = Flask(__name__)
 
@@ -74,38 +75,70 @@ def dashboard():
 @app.route('/ordini')
 def ordini_list():
     orders_list = load_all_data() or []
+    
     giorno_filtro = request.args.get('giorno_filtro')
     if giorno_filtro:
         giorno_da_cercare = giorno_filtro.zfill(2)
         orders_list = [order for order in orders_list if order.get('data_documento', '').endswith(giorno_da_cercare)]
     
     orders_list.sort(key=lambda order: order.get('data_documento', ''), reverse=True)
+
+    ordini_per_data = OrderedDict() # Usiamo un dizionario ordinato per mantenere l'ordine cronologico
+
     for order in orders_list:
         order_id = str(order.get('numero'))
         if order_id not in app_data_store["statuses"]:
             app_data_store["statuses"][order_id] = get_initial_status()
         order['local_status'] = app_data_store["statuses"].get(order_id, {}).get('status', 'Da Lavorare')
+        
         date_str = order.get('data_documento')
         if date_str and len(date_str) == 8:
             order['data_formattata'] = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
         else:
-            order['data_formattata'] = "N/D"
-    return render_template('orders.html', orders=orders_list, giorno_selezionato=giorno_filtro, active_page='ordini')
+            order['data_formattata'] = "Data non disponibile"
+
+        # Raggruppa gli ordini per la loro data formattata
+        data = order['data_formattata']
+        if data not in ordini_per_data:
+            ordini_per_data[data] = []
+        ordini_per_data[data].append(order)
+
+    return render_template('orders.html', ordini_per_data=ordini_per_data, giorno_selezionato=giorno_filtro, active_page='ordini')
 
 @app.route('/trasporto')
 def trasporto():
     orders_list = load_all_data() or []
     vettori = get_vettori()
+
+    # Logica per arricchire i dati di logistica (non cambia)
     vettori_map = {v['codice']: v.get('ragione_sociale') or v.get('descrizione') for v in vettori}
     for key, value in app_data_store["logistics"].items():
         if isinstance(value, str):
             app_data_store["logistics"][key] = {'codice': value, 'nome': vettori_map.get(value)}
+
+    # --- NUOVA LOGICA: Raggruppiamo gli ordini per data ---
+    orders_list.sort(key=lambda order: order.get('data_documento', ''), reverse=True)
+    ordini_per_data = OrderedDict()
+
     for order in orders_list:
         order_key = f"{order['sigla']}:{order['serie']}:{order['numero']}"
         logistic_info = app_data_store["logistics"].get(order_key)
         if logistic_info:
             order['vettore_assegnato'] = logistic_info.get('codice')
-    return render_template('trasporto.html', orders=orders_list, vettori=vettori, active_page='trasporto')
+
+        # Formatta la data per usarla come chiave di raggruppamento
+        date_str = order.get('data_documento')
+        if date_str and len(date_str) == 8:
+            data_formattata = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
+        else:
+            data_formattata = "Data Sconosciuta"
+
+        if data_formattata not in ordini_per_data:
+            ordini_per_data[data_formattata] = []
+        ordini_per_data[data_formattata].append(order)
+    # --- FINE NUOVA LOGICA ---
+
+    return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto')
     
 @app.route('/assign_all_vettori', methods=['POST'])
 def assign_all_vettori():

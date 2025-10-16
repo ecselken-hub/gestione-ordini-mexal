@@ -4,29 +4,28 @@
 
 {% block content %}
 <div class="header">
-    <h1>Assegnazione degli Ordini</h1>
+    <h1>Assegnazione Ordini</h1>
 </div>
 
 <form action="{{ url_for('assign_all_vettori') }}" method="POST">
-    <div class="card">
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Numero</th>
-                        <th>Cliente</th>
-                        <th>Indirizzo</th>
-                        <th style="width: 200px;">Assegna Autista</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for order in orders %}
-                    <tr>
-                        <td>{{ order.numero }}</td>
-                        <td>{{ order.ragione_sociale }}</td>
-                        <td><strong>{{ order.indirizzo }}, {{ order.localita }}</strong></td>
-                        <td>
-                            <select name="{{ order.sigla }}:{{ order.serie }}:{{ order.numero }}" class="form-control form-select">
+    
+    {% if ordini_per_data %}
+        {% for data, ordini_del_giorno in ordini_per_data.items() %}
+            <h2 style="font-size: 1.2rem; font-weight: 600; color: var(--primary-text-color); margin-bottom: 1rem; padding-left: 10px;">{{ data }}</h2>
+            
+            <div style="margin-bottom: 2.5rem;">
+                {% for order in ordini_del_giorno %}
+                <div class="card">
+                    <div class="card-body" style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+                        <div>
+                            <p style="font-weight: 600; margin: 0 0 4px 0;">{{ order.ragione_sociale }}</p>
+                            <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">
+                                📍 {{ order.indirizzo }}, {{ order.localita }}
+                            </p>
+                        </div>
+                        <div>
+                            <label style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">Assegna Autista:</label>
+                            <select name="{{ order.sigla }}:{{ order.serie }}:{{ order.numero }}" class="form-control form-select" style="padding: 8px 12px; margin-top: 4px;">
                                 <option value="">Nessuno</option>
                                 {% for vettore in vettori %}
                                     <option value="{{ vettore.codice }}" {% if order.vettore_assegnato == vettore.codice %}selected{% endif %}>
@@ -34,18 +33,23 @@
                                     </option>
                                 {% endfor %}
                             </select>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="4" style="text-align: center; padding: 2rem;">Nessun Ordine.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <div class="card">
+            <div class="card-body" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">
+                Nessun ordine da assegnare.
+            </div>
         </div>
-    </div>
-    <div style="text-align: center; margin-top: 2rem; display: flex; justify-content: center; gap: 1rem;">
-        <button type="submit" class="btn btn-primary">Salva</button>
-        <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giro</a>
+    {% endif %}
+
+    <div style="position: sticky; bottom: 95px; /* Appena sopra la tab bar */ display: flex; justify-content: center; gap: 1rem; background-color: rgba(245, 245, 247, 0.8); backdrop-filter: blur(10px); padding: 1rem; border-radius: 16px; box-shadow: 0 -4px 15px rgba(0,0,0,0.05);">
+        <button type="submit" class="btn btn-primary">Salva Assegnazioni</button>
+        <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giri</a>
     </div>
 </form>
 {% endblock %}

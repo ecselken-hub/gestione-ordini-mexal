@@ -7,56 +7,55 @@
     <h1>Ordini da Preparare</h1>
 </div>
 
-<div class="card" style="margin-bottom: 1.5rem;">
+<div class="card" style="margin-bottom: 2rem;">
     <div class="card-body" style="padding: 1rem;">
         <form method="GET" action="{{ url_for('ordini_list') }}" style="display: flex; gap: 1rem; align-items: center;">
-            <label for="giorno_filtro" style="font-weight: 500;">Filtra per Giorno:</label>
-            <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px;">
-            <button type="submit" class="btn btn-primary">Filtra</button>
+            <label for="giorno_filtro" style="font-weight: 500; color: var(--secondary-text-color);">Filtra:</label>
+            <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px; padding: 8px 12px;">
+            <button type="submit" class="btn btn-primary" style="padding: 8px 16px;">Filtra</button>
             <a href="{{ url_for('ordini_list') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Pulisci</a>
         </form>
     </div>
 </div>
 
-<div class="card">
-    <div class="table-responsive">
-        <table>
-            <thead>
-                <tr>
-                    <th>Data</th>
-                    <th>Numero</th>
-                    <th>Cliente</th>
-                    <th>Stato</th>
-                    <th>Azione</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for order in orders %}
-                <tr>
-                    <td>{{ order.data_formattata }}</td>
-                    <td>{{ order.numero }}</td>
-                    <td>{{ order.ragione_sociale }}</td>
-                    <td>
-                        <span class="badge 
-                            {% if order.local_status == 'Da Lavorare' %} bg-secondary
-                            {% elif order.local_status == 'In Picking' %} bg-primary
-                            {% elif order.local_status == 'In Controllo' %} bg-warning
-                            {% elif order.local_status == 'Completato' %} bg-success
-                            {% endif %}">
-                            {{ order.local_status }}
-                        </span>
-                    </td>
-                    <td>
-                        <a href="{{ url_for('order_detail_view', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" class="btn btn-primary">Gestisci</a>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessun ordine trovato.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+{% if ordini_per_data %}
+    {% for data, ordini_del_giorno in ordini_per_data.items() %}
+        <h2 style="font-size: 1.2rem; font-weight: 600; color: var(--primary-text-color); margin-bottom: 1rem; padding-left: 10px;">{{ data }}</h2>
+        
+        <div class="order-card-list" style="margin-bottom: 2.5rem;">
+            {% for order in ordini_del_giorno %}
+            <a href="{{ url_for('order_detail_view', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" style="text-decoration: none;">
+                <div class="card" style="transition: transform 0.2s ease, box-shadow 0.2s ease;" onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 8px 25px rgba(0,0,0,0.08)';" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(0,0,0,0.05)';">
+                    <div class="card-body" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                        <div style="flex-grow: 1;">
+                            <p style="font-weight: 600; font-size: 1.1rem; margin: 0 0 4px 0; color: var(--primary-text-color);">{{ order.ragione_sociale }}</p>
+                            <div style="font-size: 0.9rem; color: var(--secondary-text-color);">
+                                <span>#{{ order.numero }}</span>
+                                <div style="margin-top: 8px;">
+                                    <span class="badge 
+                                        {% if order.local_status == 'Da Lavorare' %} bg-secondary
+                                        {% elif order.local_status == 'In Picking' %} bg-primary
+                                        {% elif order.local_status == 'In Controllo' %} bg-warning
+                                        {% elif order.local_status == 'Completato' %} bg-success
+                                        {% endif %}">
+                                        {{ order.local_status }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="font-size: 1.5rem; color: #d1d1d6;">›</div>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    {% endfor %}
+{% else %}
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+            Nessun ordine trovato per i criteri selezionati.
+        </div>
     </div>
-</div>
+{% endif %}
+
 {% endblock %}
