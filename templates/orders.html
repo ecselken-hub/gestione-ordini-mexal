@@ -13,7 +13,7 @@
             <label for="giorno_filtro" style="font-weight: 500;">Filtra per Giorno:</label>
             <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px;">
             <button type="submit" class="btn btn-primary">Filtra</button>
-            <a href="{{ url_for('ordini_list') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Tutto</a>
+            <a href="{{ url_for('ordini_list') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Pulisci</a>
         </form>
     </div>
 </div>
@@ -52,7 +52,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessuna richiesta trovata.</td>
+                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessun ordine trovato.</td>
                 </tr>
                 {% endfor %}
             </tbody>

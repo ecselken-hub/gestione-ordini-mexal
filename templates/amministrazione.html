@@ -1,34 +1,75 @@
 {% extends "base.html" %}
 
-{% block title %}Administração{% endblock %}
+{% block title %}Amministrazione{% endblock %}
 
 {% block content %}
 <div class="header">
-    <h1>Resumo das Entregas</h1>
+    <h1>Riepilogo Consegne</h1>
 </div>
 
-{% if eventi_per_autista %}
-    {% for autista, eventi in eventi_per_autista.items() %}
-        <h2 style="font-size: 1.5rem; margin-top: 2.5rem; margin-bottom: 1rem;">🚚 {{ autista }}</h2>
+{% if riepilogo_per_autista %}
+    {% for autista, data in riepilogo_per_autista.items() %}
+        <h2 style="font-size: 1.8rem; margin-top: 2.5rem; margin-bottom: 1rem;">🚚 {{ autista }}</h2>
+        
         <div class="card">
+            <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; text-align: center;">
+                <div class="p-2">
+                    <div style="font-size: 0.8rem; color: var(--secondary-text-color);">DATA</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;">{{ data.summary.data }}</div>
+                </div>
+                <div class="p-2">
+                    <div style="font-size: 0.8rem; color: var(--secondary-text-color);">N° Consegne</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;">{{ data.summary.num_consegne }}</div>
+                </div>
+                <div class="p-2">
+                    <div style="font-size: 0.8rem; color: var(--secondary-text-color);">Km Previsti</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;">{{ data.summary.km_previsti }}</div>
+                </div>
+                <div class="p-2">
+                    <div style="font-size: 0.8rem; color: var(--secondary-text-color);">Tempo Previsto</div>
+                    <div style="font-size: 1.2rem; font-weight: 600;">{{ data.summary.tempo_previsto }}</div>
+                </div>
+                <div class="p-2">
+                    <div style="font-size: 0.8rem; color: var(--secondary-text-color);">TEMPO IMPIEGATO</div>
+                    <div style="font-size: 1.2rem; font-weight: 600; color: var(--accent-color);">{{ data.summary.tempo_totale_reale }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <div class="card-header">Dettaglio Consegne Completate</div>
             <div class="table-responsive">
                 <table>
                     <thead>
                         <tr>
-                            <th>Destino</th>
-                            <th>Início da Entrega</th>
-                            <th>Fim da Entrega</th>
+                            <th>Destinazione</th>
+                            <th>Telefono</th>
+                            <th>Finestra / Previsto</th>
+                            <th>Pagamento / Colli</th>
+                            <th>Inizio Reale</th>
+                            <th>Fine Reale</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for evento in eventi %}
+                        {% for tappa in data.consegne %}
                             <tr>
                                 <td>
-                                    <strong>{{ evento.indirizzo }}, {{ evento.localita }}</strong>
-                                    <div style="color: var(--secondary-text-color); font-size: 0.9rem;">{{ evento.ragione_sociale }}</div>
+                                    <strong>{{ tappa.indirizzo }}, {{ tappa.localita }}</strong>
+                                    <div style="font-size: 0.9rem; color: var(--secondary-text-color);">{{ tappa.ragione_sociale }}</div>
                                 </td>
-                                <td>{{ evento.start_time }}</td>
-                                <td>{{ evento.end_time }}</td>
+                                <td>{{ tappa.telefono }}</td>
+                                <td>
+                                    {{ tappa.orario1_start or 'N/D' }} - {{ tappa.orario1_end or 'N/D' }}
+                                    {% if tappa.orario_previsto %}
+                                        <br><span style="color: var(--accent-color); font-weight: 500;">Prev: {{ tappa.orario_previsto }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {{ tappa.pagamento_desc }}
+                                    <br><strong>Colli: {{ tappa.colli_da_consegnare }}</strong>
+                                </td>
+                                <td>{{ tappa.start_time_reale }}</td>
+                                <td>{{ tappa.end_time_reale }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -37,6 +78,10 @@
         </div>
     {% endfor %}
 {% else %}
-    <div class="card"><div class="card-body" style="text-align: center;">Nenhuma entrega foi concluída ainda.</div></div>
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">
+            Nessuna consegna è stata ancora completata.
+        </div>
+    </div>
 {% endif %}
 {% endblock %}

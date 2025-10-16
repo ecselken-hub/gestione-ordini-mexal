@@ -54,7 +54,7 @@
         .table-responsive { width: 100%; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; text-align: left; }
         th, td { padding: 1rem; border-bottom: 1px solid var(--separator-color); vertical-align: middle; }
-        th { font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; font-size: 0.8rem; }
+        th { font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; font-size: 0.8rem; white-space: nowrap; }
         tbody tr:last-child td { border-bottom: none; }
         .tab-bar {
             position: fixed; bottom: 0; left: 0; right: 0; height: 75px;
@@ -71,7 +71,7 @@
         }
         .tab-item .icon { font-size: 1.8rem; margin-bottom: 2px; }
         .tab-item.active { color: var(--accent-color); }
-        .btn { display: inline-block; padding: 10px 20px; font-size: 1rem; font-weight: 600; border-radius: 10px; text-decoration: none; border: none; cursor: pointer; }
+        .btn { display: inline-block; padding: 10px 20px; font-size: 1rem; font-weight: 600; border-radius: 10px; text-decoration: none; border: none; cursor: pointer; white-space: nowrap; }
         .btn-primary { background-color: var(--accent-color); color: white; }
         .btn-secondary { background-color: #e5e5ea; color: var(--accent-color); }
         .btn-success { background-color: var(--success-color); color: white; }
@@ -88,6 +88,21 @@
         .bg-secondary { background-color: var(--secondary-text-color); }
         .bg-success { background-color: var(--success-color); }
         .bg-warning { background-color: var(--warning-color); color: var(--primary-text-color) !important; }
+
+        /* --- NUOVA REGOLA PER IL RESPONSIVE --- */
+        @media (max-width: 768px) {
+            th, td {
+                padding: 0.75rem 0.5rem; /* Riduci lo spazio interno delle celle */
+                font-size: 0.9rem; /* Riduci leggermente il testo */
+            }
+            .header h1 {
+                font-size: 1.5rem; /* Riduci il titolo della pagina */
+            }
+            .btn {
+                padding: 8px 12px; /* Riduci la dimensione dei pulsanti */
+                font-size: 0.9rem;
+            }
+        }
     </style>
 </head>
 <body>

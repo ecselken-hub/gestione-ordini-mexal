@@ -14,13 +14,13 @@ app_data_store = {
 }
 
 def get_initial_status():
-    """Cria um dicionário de status padrão para um novo pedido."""
+    """Crea un dizionario di stato di default per un nuovo ordine."""
     return {'status': 'Da Lavorare', 'picked_items': {}, 'colli_totali_operatore': 0}
 
 def load_all_data():
     if app_data_store.get("orders"): return list(app_data_store["orders"].values())
     
-    print("--- Início do carregamento em massa de dados da API ---")
+    print("--- Inizio caricamento di massa dei dati dall'API ---")
     
     clients_response = mx_call_api('risorse/clienti/ricerca', method='POST', data={'Filtri': []})
     client_map = {client['codice']: client for client in (clients_response.get('dati') or [])}
@@ -164,7 +164,7 @@ def calcola_giri():
                 'efficienza': 'N/D', 'consumo_carburante': 'N/D'
             }
         except Exception as e:
-            print(f"Errore durante o cálculo da rota para {vettore}: {e}")
+            print(f"Errore durante il calcolo del percorso per {vettore}: {e}")
     
     return redirect(url_for('autisti'))
 
@@ -212,30 +212,55 @@ def end_consegna():
         app_data_store["delivery_events"].setdefault(order_key, {})['end_time'] = datetime.now().strftime('%H:%M:%S')
     return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
+# --- FUNZIONE AMMINISTRAZIONE AGGIORNATA ---
 @app.route('/amministrazione')
 def amministrazione():
-    eventi_per_autista = {}
-    for order_key, logistic_info in app_data_store["logistics"].items():
-        if isinstance(logistic_info, dict):
-            autista_nome = logistic_info.get('nome')
+    riepilogo_per_autista = {}
+    giri_calcolati = app_data_store.get("calculated_routes", {})
+
+    for autista_nome, giro_info in giri_calcolati.items():
+        consegne_completate = []
+        tempo_totale_consegne_sec = 0
+
+        for tappa in giro_info.get('tappe', []):
+            order_key = f"{tappa['sigla']}:{tappa['serie']}:{tappa['numero']}"
             evento = app_data_store["delivery_events"].get(order_key)
-            if autista_nome and evento and 'end_time' in evento:
-                if autista_nome not in eventi_per_autista: eventi_per_autista[autista_nome] = []
-                ordine = app_data_store["orders"].get(order_key)
-                dettaglio_evento = {
-                    'ragione_sociale': ordine.get('ragione_sociale', 'N/D'),
-                    'indirizzo': ordine.get('indirizzo', '-'), 'localita': ordine.get('localita', '-'),
-                    'start_time': evento.get('start_time', '-'), 'end_time': evento.get('end_time', '-')
-                }
-                eventi_per_autista[autista_nome].append(dettaglio_evento)
-    return render_template('amministrazione.html', eventi_per_autista=eventi_per_autista, active_page='amministrazione')
+
+            if evento and 'end_time' in evento:
+                # Calcola la durata della singola consegna
+                try:
+                    start_time = datetime.strptime(evento['start_time'], '%H:%M:%S')
+                    end_time = datetime.strptime(evento['end_time'], '%H:%M:%S')
+                    durata = end_time - start_time
+                    tempo_totale_consegne_sec += durata.total_seconds()
+                except (ValueError, TypeError):
+                    pass # Ignora se gli orari non sono validi
+
+                tappa['start_time_reale'] = evento.get('start_time', '-')
+                tappa['end_time_reale'] = evento.get('end_time', '-')
+                
+                order_id = str(tappa.get('numero'))
+                status = app_data_store["statuses"].get(order_id, {})
+                tappa['colli_da_consegnare'] = status.get('colli_totali_operatore', 'N/D')
+
+                consegne_completate.append(tappa)
+
+        if consegne_completate:
+            # Aggiunge il tempo totale calcolato al riepilogo
+            giro_info['tempo_totale_reale'] = time.strftime("%Hh %Mm", time.gmtime(tempo_totale_consegne_sec))
+            riepilogo_per_autista[autista_nome] = {
+                'summary': giro_info,
+                'consegne': consegne_completate
+            }
+            
+    return render_template('amministrazione.html', riepilogo_per_autista=riepilogo_per_autista, active_page='amministrazione')
 
 @app.route('/order/<sigla>/<serie>/<numero>')
 def order_detail_view(sigla, serie, numero):
     if not app_data_store["orders"]: load_all_data()
     order_key = f"{sigla}:{serie}:{numero}"
     order = app_data_store["orders"].get(order_key)
-    if not order: return f"Erro: Detalhes do pedido {order_key} não encontrados.", 404
+    if not order: return f"Errore: Dettagli ordine {order_key} non trovati.", 404
     order_id = str(order.get('numero'))
     if order_id not in app_data_store["statuses"]:
         app_data_store["statuses"][order_id] = get_initial_status()
@@ -247,7 +272,7 @@ def order_action(sigla, serie, numero):
     action = request.form.get('action')
     order_id = str(numero)
     current_state = app_data_store["statuses"].get(order_id)
-    if not current_state: return "Status do pedido não encontrado.", 404
+    if not current_state: return "Stato dell'ordine non trovato.", 404
     if action == 'start_picking':
         current_state['status'] = 'In Picking'
     elif action == 'complete_picking':
