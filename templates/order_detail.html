@@ -1,96 +1,114 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-    <meta charset="UTF-8">
-    <title>Dettaglio Ordine {{ order.numero }}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
-</head>
-<body class="bg-light">
-    <div class="container mt-5">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1>Ordine #{{ order.numero }}</h1>
-            <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Torna alla Lista Ordini</a>
-        </div>
-        
-        <div class="card mb-4">
-            <div class="card-header">
-                <h3>Dati Cliente</h3>
-            </div>
-            <div class="card-body">
-                <p><strong>Ragione Sociale:</strong> {{ order.ragione_sociale }}</p>
-                <p><strong>Indirizzo:</strong> {{ order.indirizzo }}</p>
-            </div>
-        </div>
+{% extends "base.html" %}
 
-        <div class="card">
-            <div class="card-header">
-                <h3>Gestione Picking e Controllo</h3>
-            </div>
-            <div class="card-body">
-                <p>Stato Attuale: 
-                    <strong class="
-                        {% if state.status == 'In Picking' %} text-primary
-                        {% elif state.status == 'In Controllo' %} text-warning
-                        {% elif state.status == 'Completato' %} text-success
-                        {% else %} text-secondary {% endif %}">
-                        {{ state.status }}
-                    </strong>
-                </p>
-                <hr>
-                
-                <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
-                    <table class="table table-bordered">
-                        <thead>
-                            <tr>
-                                <th>Codice Articolo</th>
-                                <th>Descrizione</th>
-                                <th>Qtà Ordinata</th>
-                                <th>Qtà Preparata (Picking)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {# Usiamo i nomi dei campi dedotti dallo script di Google Sheets #}
-                            {% if order.righe %}
-                                {% for item in order.righe %}
-                                <tr>
-                                    <td>{{ item.codice_articolo }}</td>
-                                    <td>{{ item.descr_articolo }}</td>
-                                    <td><strong>{{ item.quantita }}</strong></td>
-                                    <td>
-                                        <input type="number" 
-                                               name="picked_{{ item.codice_articolo }}" 
-                                               class="form-control" 
-                                               value="{{ state.picked_items.get(item.codice_articolo, '') }}"
-                                               {% if state.status != 'In Picking' %}readonly{% endif %}>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            {% else %}
-                                <tr>
-                                    <td colspan="4" class="text-center"><em>Nessuna riga articolo trovata in questo ordine.</em></td>
-                                </tr>
-                            {% endif %}
-                        </tbody>
-                    </table>
-                    
-                    <div class="mt-4">
-                        {% if state.status == 'Da Lavorare' %}
-                            <button type="submit" name="action" value="start_picking" class="btn btn-primary">Avvia Picking</button>
-                        {% elif state.status == 'In Picking' %}
-                            <button type="submit" name="action" value="complete_picking" class="btn btn-success">Completa Picking e Invia a Controllo</button>
-                        {% elif state.status == 'In Controllo' %}
-                            <p><em>Verificare la corrispondenza tra quantità ordinata e preparata.</em></p>
-                            <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva e Completa Ordine</button>
-                            <button type="submit" name="action" value="reject_order" class="btn btn-danger">Segnala Problema e Rimanda al Picking</button>
-                        {% elif state.status == 'Completato' %}
-                            <div class="alert alert-success" role="alert">
-                                ✔️ Ordine completato e pronto per la spedizione.
-                            </div>
-                        {% endif %}
-                    </div>
-                </form>
-            </div>
-        </div>
+{% block title %}Dettaglio Ordine {{ order.numero }}{% endblock %}
+
+{% block content %}
+<div class="header">
+    <div>
+        <h1 style="font-size: 2.2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
+        <p style="color: var(--secondary-text-color); margin: 0;">{{ order.ragione_sociale }}</p>
     </div>
-</body>
-</html>
+    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Dati Cliente
+    </div>
+    <div class="card-body">
+        <p><strong>Indirizzo di Spedizione:</strong> {{ order.indirizzo }}, {{ order.localita }}</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Gestione Picking e Controllo
+    </div>
+    <div class="card-body">
+        <p style="margin-bottom: 1.5rem;">
+            <span style="color: var(--secondary-text-color); font-weight: 500;">Stato Attuale:</span>
+            <span class="badge 
+                {% if state.status == 'In Picking' %} bg-primary
+                {% elif state.status == 'In Controllo' %} bg-warning
+                {% elif state.status == 'Completato' %} bg-success
+                {% else %} bg-secondary {% endif %}">
+                {{ state.status }}
+            </span>
+        </p>
+
+        <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Codice Articolo</th>
+                            <th>Descrizione</th>
+                            <th>Qtà Ordinata</th>
+                            <th>Qtà Preparata</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if order.righe %}
+                            {% for item in order.righe %}
+                            <tr>
+                                <td>{{ item.codice_articolo }}</td>
+                                <td>{{ item.descr_articolo }}</td>
+                                <td>
+                                    <strong>
+                                        {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
+                                            {% set pezzi_per_collo = (item.quantita / item.nr_colli) | int %}
+                                            {{ item.nr_colli }} * {{ pezzi_per_collo }}
+                                        {% else %}
+                                            {{ item.quantita }}
+                                        {% endif %}
+                                    </strong>
+                                </td>
+                                <td>
+                                    <input type="number" 
+                                           name="picked_qty_{{ item.codice_articolo }}" 
+                                           class="form-control" 
+                                           value="{{ state.picked_items.get(item.codice_articolo, '') }}"
+                                           style="width: 100px;"
+                                           {% if state.status != 'In Picking' %}readonly{% endif %}>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="4" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessuna riga articolo trovata in questo ordine.</td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--separator-color);">
+                {% if state.status == 'Da Lavorare' %}
+                    <button type="submit" name="action" value="start_picking" class="btn btn-primary">Avvia Picking</button>
+                
+                {% elif state.status == 'In Picking' %}
+                    <div style="display: flex; gap: 1rem; align-items: flex-end;">
+                        <div>
+                            <label for="colli_totali_operatore" style="font-weight: 600; margin-bottom: 0.5rem; display: block;">TOTALE COLLI PREPARATI:</label>
+                            <input type="number" class="form-control" id="colli_totali_operatore" name="colli_totali_operatore" value="{{ state.colli_totali_operatore or '' }}" style="width: 120px;">
+                        </div>
+                        <button type="submit" name="action" value="complete_picking" class="btn btn-success">Completa Picking</button>
+                    </div>
+
+                {% elif state.status == 'In Controllo' %}
+                    <p style="font-size: 1.1rem;"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore }}</strong></p>
+                    <div style="margin-top: 1rem; display: flex; gap: 1rem;">
+                        <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva e Completa Ordine</button>
+                        <button type="submit" name="action" value="reject_order" class="btn btn-danger">Segnala Problema</button>
+                    </div>
+                
+                {% elif state.status == 'Completato' %}
+                    <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px; font-weight: 600;">
+                        ✔️ Ordine completato e pronto per la spedizione.
+                    </div>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

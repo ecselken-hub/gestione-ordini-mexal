@@ -67,3 +67,56 @@ def get_vettori():
         return vettori_filtrati
         
     return []
+
+def get_shipping_address(address_id):
+    """
+    Recupera un singolo indirizzo di spedizione usando il suo ID codificato in HEX,
+    come richiesto dalla documentazione e dalla logica di Google Sheets.
+    """
+    if not address_id:
+        return None
+    
+    # 1. Codifichiamo l'ID in esadecimale (HEX).
+    encoded_id = str(address_id).encode('utf-8').hex()
+    
+    # 2. Costruiamo l'URL per l'accesso diretto, specificando l'encoding.
+    endpoint = f"risorse/indirizzi-spedizione/{encoded_id}?encoding=hex"
+    
+    # 3. Eseguiamo una semplice chiamata GET.
+    response = mx_call_api(endpoint, method='GET')
+    
+    if response and response.get('dati'):
+        return response['dati']
+        
+    return None
+
+def get_dati_aggiuntivi(client_code):
+    """
+    Recupera i dati aggiuntivi di un cliente (inclusi gli orari di consegna)
+    usando l'accesso diretto con ID codificato.
+    """
+    if not client_code:
+        return None
+        
+    encoded_id = str(client_code).encode('utf-8').hex()
+    
+    # L'endpoint per i dati aggiuntivi è una "sotto-risorsa" del cliente
+    endpoint = f"risorse/clienti/{encoded_id}/dati-aggiuntivi?encoding=hex"
+    
+    response = mx_call_api(endpoint, method='GET')
+    
+    if response and response.get('dati'):
+        return response['dati']
+        
+    return {}
+
+def get_payment_methods():
+    """
+    Recupera la lista di tutti i metodi di pagamento.
+    """
+    endpoint = 'risorse/dati-generali/pagamenti/ricerca'
+    response = mx_call_api(endpoint, method='POST', data={'Filtri': []})
+    if response and response.get('dati'):
+        # Trasforma la lista in un dizionario per un accesso rapido: {id: descrizione}
+        return {metodo['id']: metodo.get('descrizione', 'N/D') for metodo in response['dati']}
+    return {}
