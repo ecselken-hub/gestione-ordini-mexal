@@ -1,24 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Amministrazione{% endblock %}
+{% block title %}Administração{% endblock %}
 
 {% block content %}
 <div class="header">
-    <h1>Riepilogo Consegne</h1>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Dashboard</a>
+    <h1>Resumo das Entregas</h1>
 </div>
 
 {% if eventi_per_autista %}
     {% for autista, eventi in eventi_per_autista.items() %}
-        <h2 style="font-size: 1.5rem; padding: 0 10px; margin-top: 2.5rem; margin-bottom: 1rem;">🚚 {{ autista }}</h2>
+        <h2 style="font-size: 1.5rem; margin-top: 2.5rem; margin-bottom: 1rem;">🚚 {{ autista }}</h2>
         <div class="card">
             <div class="table-responsive">
                 <table>
                     <thead>
                         <tr>
-                            <th>Destinazione</th>
-                            <th>Inizio Consegna</th>
-                            <th>Fine Consegna</th>
+                            <th>Destino</th>
+                            <th>Início da Entrega</th>
+                            <th>Fim da Entrega</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -38,10 +37,6 @@
         </div>
     {% endfor %}
 {% else %}
-    <div class="card">
-        <div class="card-body" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">
-            Nessuna consegna è stata ancora completata.
-        </div>
-    </div>
+    <div class="card"><div class="card-body" style="text-align: center;">Nenhuma entrega foi concluída ainda.</div></div>
 {% endif %}
 {% endblock %}

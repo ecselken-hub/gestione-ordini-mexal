@@ -4,17 +4,16 @@
 
 {% block content %}
 <div class="header">
-    <h1>Ordini da Lavorare</h1>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Dashboard</a>
+    <h1>Ordini da Preparare</h1>
 </div>
 
-<div class="card">
+<div class="card" style="margin-bottom: 1.5rem;">
     <div class="card-body" style="padding: 1rem;">
         <form method="GET" action="{{ url_for('ordini_list') }}" style="display: flex; gap: 1rem; align-items: center;">
             <label for="giorno_filtro" style="font-weight: 500;">Filtra per Giorno:</label>
-            <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 120px;">
+            <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px;">
             <button type="submit" class="btn btn-primary">Filtra</button>
-            <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary" style="background-color: transparent; color: var(--accent-color);">Mostra Tutti</a>
+            <a href="{{ url_for('ordini_list') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Tutto</a>
         </form>
     </div>
 </div>
@@ -53,7 +52,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessun ordine trovato.</td>
+                    <td colspan="5" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessuna richiesta trovata.</td>
                 </tr>
                 {% endfor %}
             </tbody>

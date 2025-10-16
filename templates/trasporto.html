@@ -4,8 +4,7 @@
 
 {% block content %}
 <div class="header">
-    <h1>Assegnazione Ordini</h1>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary">Dashboard</a>
+    <h1>Assegnazione degli Ordini</h1>
 </div>
 
 <form action="{{ url_for('assign_all_vettori') }}" method="POST">
@@ -16,8 +15,8 @@
                     <tr>
                         <th>Numero</th>
                         <th>Cliente</th>
-                        <th>Indirizzo Completo</th>
-                        <th style="width: 250px;">Assegna Autista</th>
+                        <th>Indirizzo</th>
+                        <th style="width: 200px;">Assegna Autista</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -38,18 +37,15 @@
                         </td>
                     </tr>
                     {% else %}
-                    <tr>
-                        <td colspan="4" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessun ordine da assegnare.</td>
-                    </tr>
+                    <tr><td colspan="4" style="text-align: center; padding: 2rem;">Nessun Ordine.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
-
     <div style="text-align: center; margin-top: 2rem; display: flex; justify-content: center; gap: 1rem;">
-        <button type="submit" class="btn btn-primary">Salva Assegnazioni</button>
-        <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giri</a>
+        <button type="submit" class="btn btn-primary">Salva</button>
+        <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giro</a>
     </div>
 </form>
 {% endblock %}

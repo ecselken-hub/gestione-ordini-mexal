@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dettaglio Ordine {{ order.numero }}{% endblock %}
+{% block title %}Dettagli Ordine {{ order.numero }}{% endblock %}
 
 {% block content %}
 <div class="header">
@@ -8,25 +8,21 @@
         <h1 style="font-size: 2.2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
         <p style="color: var(--secondary-text-color); margin: 0;">{{ order.ragione_sociale }}</p>
     </div>
-    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a>
+    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista degli ordini</a>
 </div>
 
 <div class="card">
-    <div class="card-header">
-        Dati Cliente
-    </div>
+    <div class="card-header">Dati del Cliente</div>
     <div class="card-body">
-        <p><strong>Indirizzo di Spedizione:</strong> {{ order.indirizzo }}, {{ order.localita }}</p>
+        <p><strong>Indirizzo di Consegna:</strong> {{ order.indirizzo }}, {{ order.localita }}</p>
     </div>
 </div>
 
 <div class="card">
-    <div class="card-header">
-        Gestione Picking e Controllo
-    </div>
+    <div class="card-header">Gestione del Prelievo e del Controllo</div>
     <div class="card-body">
         <p style="margin-bottom: 1.5rem;">
-            <span style="color: var(--secondary-text-color); font-weight: 500;">Stato Attuale:</span>
+            <span style="color: var(--secondary-text-color); font-weight: 500;">Status Attuale:</span>
             <span class="badge 
                 {% if state.status == 'In Picking' %} bg-primary
                 {% elif state.status == 'In Controllo' %} bg-warning
@@ -35,16 +31,15 @@
                 {{ state.status }}
             </span>
         </p>
-
         <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
             <div class="table-responsive">
                 <table>
                     <thead>
                         <tr>
-                            <th>Codice Articolo</th>
+                            <th>Codice articolo</th>
                             <th>Descrizione</th>
-                            <th>Qtà Ordinata</th>
-                            <th>Qtà Preparata</th>
+                            <th>Quantità richiesta</th>
+                            <th>Quantità preparata</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -56,56 +51,43 @@
                                 <td>
                                     <strong>
                                         {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
-                                            {% set pezzi_per_collo = (item.quantita / item.nr_colli) | int %}
-                                            {{ item.nr_colli }} * {{ pezzi_per_collo }}
+                                            {% set pecas_por_caixa = (item.quantita / item.nr_colli) | int %}
+                                            {{ item.nr_colli }} * {{ pecas_por_caixa }}
                                         {% else %}
                                             {{ item.quantita }}
                                         {% endif %}
                                     </strong>
                                 </td>
                                 <td>
-                                    <input type="number" 
-                                           name="picked_qty_{{ item.codice_articolo }}" 
-                                           class="form-control" 
-                                           value="{{ state.picked_items.get(item.codice_articolo, '') }}"
-                                           style="width: 100px;"
-                                           {% if state.status != 'In Picking' %}readonly{% endif %}>
+                                    <input type="number" name="picked_qty_{{ item.codice_articolo }}" class="form-control" value="{{ state.picked_items.get(item.codice_articolo, '') }}" style="width: 100px;" {% if state.status != 'In Picking' %}readonly{% endif %}>
                                 </td>
                             </tr>
                             {% endfor %}
                         {% else %}
-                            <tr>
-                                <td colspan="4" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessuna riga articolo trovata in questo ordine.</td>
-                            </tr>
+                            <tr><td colspan="4" style="text-align: center; padding: 2rem;">Nessun articolo trovato.</td></tr>
                         {% endif %}
                     </tbody>
                 </table>
             </div>
-            
             <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--separator-color);">
                 {% if state.status == 'Da Lavorare' %}
-                    <button type="submit" name="action" value="start_picking" class="btn btn-primary">Avvia Picking</button>
-                
+                    <button type="submit" name="action" value="start_picking" class="btn btn-primary">Inzio Picking</button>
                 {% elif state.status == 'In Picking' %}
                     <div style="display: flex; gap: 1rem; align-items: flex-end;">
                         <div>
-                            <label for="colli_totali_operatore" style="font-weight: 600; margin-bottom: 0.5rem; display: block;">TOTALE COLLI PREPARATI:</label>
+                            <label for="colli_totali_operatore" style="font-weight: 600; margin-bottom: 0.5rem;">Colli Totali:</label>
                             <input type="number" class="form-control" id="colli_totali_operatore" name="colli_totali_operatore" value="{{ state.colli_totali_operatore or '' }}" style="width: 120px;">
                         </div>
-                        <button type="submit" name="action" value="complete_picking" class="btn btn-success">Completa Picking</button>
+                        <button type="submit" name="action" value="complete_picking" class="btn btn-success">Concludi Picking</button>
                     </div>
-
                 {% elif state.status == 'In Controllo' %}
-                    <p style="font-size: 1.1rem;"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore }}</strong></p>
+                    <p><strong>Total de Caixas Declaradas: {{ state.colli_totali_operatore }}</strong></p>
                     <div style="margin-top: 1rem; display: flex; gap: 1rem;">
-                        <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva e Completa Ordine</button>
-                        <button type="submit" name="action" value="reject_order" class="btn btn-danger">Segnala Problema</button>
+                        <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva e Conludi</button>
+                        <button type="submit" name="action" value="reject_order" class="btn btn-danger">Riscontra un Problema</button>
                     </div>
-                
                 {% elif state.status == 'Completato' %}
-                    <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px; font-weight: 600;">
-                        ✔️ Ordine completato e pronto per la spedizione.
-                    </div>
+                    <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px;">✔️ Ordine completato.</div>
                 {% endif %}
             </div>
         </form>
