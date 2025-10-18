@@ -59,14 +59,14 @@
                     </div>
                     
                     <div class="stepper">
-                        <button type="button" class="stepper-btn stepper-minus" {% if state.status != 'In Picking' %}disabled{% endif %}>-</button>
+                        <button type="button" class="stepper-btn stepper-plus" {% if state.status != 'In Picking' %}disabled{% endif %}>+</button>
                         <input type="number" 
                                id="picked_qty_{{ item.codice_articolo }}"
                                name="picked_qty_{{ item.codice_articolo }}" 
                                value="{{ state.picked_items.get(item.codice_articolo, '0') }}"
                                min="0"
                                {% if state.status != 'In Picking' %}readonly{% endif %}>
-                        <button type="button" class="stepper-btn stepper-plus" {% if state.status != 'In Picking' %}disabled{% endif %}>+</button>
+                        <button type="button" class="stepper-btn stepper-minus" {% if state.status != 'In Picking' %}disabled{% endif %}>-</button>
                     </div>
                 </div>
                 {% endfor %}
