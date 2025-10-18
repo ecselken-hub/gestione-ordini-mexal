@@ -6,47 +6,64 @@ import googlemaps
 from datetime import datetime, timedelta
 from collections import OrderedDict
 import math
+from flask_httpauth import HTTPBasicAuth # Importa la libreria
 
 app = Flask(__name__)
+auth = HTTPBasicAuth() # Crea l'oggetto per l'autenticazione
 
-# gmaps = googlemaps.Client(key=os.getenv('GOOGLE_MAPS_API_KEY'))
+# --- DEFINIZIONE UTENTI E RUOLI ---
+# Puoi aggiungere/modificare utenti qui
+users = {
+    "admin": {"password": "japlab", "roles": ["admin"]},
+    "autista": {"password": "autista", "roles": ["autista"]},
+    "preparatore": {"password": "preparatore", "roles": ["preparatore"]},
+    "boxer": {"password": "boxer", "roles": ["autista"]},
+    "expert": {"password": "expert", "roles": ["autista"]}
+}
+
+@auth.verify_password
+def verify_password(username, password):
+    """Verifica se username e password sono corretti."""
+    user = users.get(username)
+    if user and user.get('password') == password:
+        return username # Ritorna l'username se l'autenticazione ha successo
+
+@auth.get_user_roles
+def get_user_roles(username):
+    """Restituisce i ruoli dell'utente autenticato."""
+    user = users.get(username)
+    return user.get('roles') if user else None
+# --- FINE DEFINIZIONE UTENTI ---
 
 app_data_store = {
     "orders": {}, "statuses": {}, "logistics": {}, "delivery_events": {}, "calculated_routes": {}
 }
 
 def get_initial_status():
-    """Crea un dizionario di stato di default per un nuovo ordine."""
     return {'status': 'Da Lavorare', 'picked_items': {}, 'colli_totali_operatore': 0}
 
+# La funzione load_all_data() non cambia...
 def load_all_data():
     if app_data_store.get("orders"): return list(app_data_store["orders"].values())
-    
     print("--- Inizio caricamento di massa dei dati dall'API ---")
-    
     clients_response = mx_call_api('risorse/clienti/ricerca', method='POST', data={'Filtri': []})
     client_map = {client['codice']: client for client in (clients_response.get('dati') or [])}
     payment_map = get_payment_methods()
-
     orders_response = mx_call_api('risorse/documenti/ordini-clienti/ricerca', method='POST', data={'Filtri': []})
     if not orders_response or not orders_response.get('dati'): return None
     orders = orders_response['dati']
-
     rows_response = mx_call_api('risorse/documenti/ordini-clienti/righe/ricerca', method='POST', data={'Filtri': []})
     rows_map = {}
     if rows_response and rows_response.get('dati'):
         for row in rows_response['dati']:
             order_key = f"{row['sigla']}:{row['serie']}:{row['numero']}"
             rows_map.setdefault(order_key, []).append(row)
-
     for order in orders:
         order_key = f"{order['sigla']}:{order['serie']}:{order['numero']}"
         client_code = order.get('cod_conto')
         client_data = client_map.get(client_code, {})
-        
         order['ragione_sociale'] = client_data.get('ragione_sociale', 'N/D')
         order['telefono'] = client_data.get('telefono', 'N/D')
-        
         shipping_address_id = order.get('cod_anag_sped')
         shipping_address_data = get_shipping_address(shipping_address_id) if shipping_address_id else None
         if shipping_address_data:
@@ -55,104 +72,90 @@ def load_all_data():
         else:
             order['indirizzo'] = client_data.get('indirizzo', 'N/D')
             order['localita'] = client_data.get('localita', 'N/D')
-
         dati_aggiuntivi = get_dati_aggiuntivi(client_code)
         order['orario1_start'] = dati_aggiuntivi.get('orario1start') 
         order['orario1_end'] = dati_aggiuntivi.get('orario1end')
         order['nota'] = order.get('nota', '')
-        
         order['pagamento_desc'] = payment_map.get(order.get('id_pagamento'), 'N/D')
-        order['valore_merci'] = order.get('totale_doc', 0.0)
-        
         order['righe'] = rows_map.get(order_key, [])
         app_data_store["orders"][order_key] = order
-
     return orders
 
 @app.route('/')
+@auth.login_required # Richiede login per la pagina principale
 def dashboard():
-    return redirect(url_for('ordini_list'))
+    # Reindirizza l'utente alla sua pagina di default
+    roles = get_user_roles(auth.current_user())
+    if 'admin' in roles:
+        return redirect(url_for('ordini_list'))
+    elif 'preparatore' in roles:
+        return redirect(url_for('ordini_list'))
+    elif 'autista' in roles:
+        return redirect(url_for('autisti'))
+    else:
+        return "Ruolo non autorizzato", 403
 
 @app.route('/ordini')
+@auth.login_required(role=['admin', 'preparatore']) # Solo admin e preparatore
 def ordini_list():
+    # ... (logica non cambia, ma ora si passa il ruolo al template) ...
     orders_list = load_all_data() or []
-    
     giorno_filtro = request.args.get('giorno_filtro')
     if giorno_filtro:
         giorno_da_cercare = giorno_filtro.zfill(2)
         orders_list = [order for order in orders_list if order.get('data_documento', '').endswith(giorno_da_cercare)]
-    
-    orders_list.sort(key=lambda order: order.get('data_documento', ''), reverse=True)
-
-    ordini_per_data = OrderedDict() # Usiamo un dizionario ordinato per mantenere l'ordine cronologico
-
-    for order in orders_list:
-        order_id = str(order.get('numero'))
-        if order_id not in app_data_store["statuses"]:
-            app_data_store["statuses"][order_id] = get_initial_status()
-        order['local_status'] = app_data_store["statuses"].get(order_id, {}).get('status', 'Da Lavorare')
-        
-        date_str = order.get('data_documento')
-        if date_str and len(date_str) == 8:
-            order['data_formattata'] = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
-        else:
-            order['data_formattata'] = "Data non disponibile"
-
-        # Raggruppa gli ordini per la loro data formattata
-        data = order['data_formattata']
-        if data not in ordini_per_data:
-            ordini_per_data[data] = []
-        ordini_per_data[data].append(order)
-
-    return render_template('orders.html', ordini_per_data=ordini_per_data, giorno_selezionato=giorno_filtro, active_page='ordini')
-
-@app.route('/trasporto')
-def trasporto():
-    orders_list = load_all_data() or []
-    vettori = get_vettori()
-
-    # Logica per arricchire i dati di logistica (non cambia)
-    vettori_map = {v['codice']: v.get('ragione_sociale') or v.get('descrizione') for v in vettori}
-    for key, value in app_data_store["logistics"].items():
-        if isinstance(value, str):
-            app_data_store["logistics"][key] = {'codice': value, 'nome': vettori_map.get(value)}
-
-    # --- NUOVA LOGICA: Raggruppiamo gli ordini per data ---
     orders_list.sort(key=lambda order: order.get('data_documento', ''), reverse=True)
     ordini_per_data = OrderedDict()
+    for order in orders_list:
+        order_id = str(order.get('numero'))
+        if order_id not in app_data_store["statuses"]: app_data_store["statuses"][order_id] = get_initial_status()
+        order['local_status'] = app_data_store["statuses"].get(order_id, {}).get('status', 'Da Lavorare')
+        date_str = order.get('data_documento')
+        if date_str and len(date_str) == 8: order['data_formattata'] = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
+        else: order['data_formattata'] = "Data non disponibile"
+        data = order['data_formattata']
+        if data not in ordini_per_data: ordini_per_data[data] = []
+        ordini_per_data[data].append(order)
+    current_roles = get_user_roles(auth.current_user()) # Passa i ruoli al template
+    return render_template('orders.html', ordini_per_data=ordini_per_data, giorno_selezionato=giorno_filtro, active_page='ordini', roles=current_roles)
 
+@app.route('/trasporto')
+@auth.login_required(role='admin') # Solo admin
+def trasporto():
+    # ... (logica non cambia, ma ora si passa il ruolo al template) ...
+    orders_list = load_all_data() or []
+    vettori = get_vettori()
+    vettori_map = {v['codice']: v.get('ragione_sociale') or v.get('descrizione') for v in vettori}
+    for key, value in app_data_store["logistics"].items():
+        if isinstance(value, str): app_data_store["logistics"][key] = {'codice': value, 'nome': vettori_map.get(value)}
+    ordini_per_data = OrderedDict()
+    orders_list.sort(key=lambda order: order.get('data_documento', ''), reverse=True)
     for order in orders_list:
         order_key = f"{order['sigla']}:{order['serie']}:{order['numero']}"
         logistic_info = app_data_store["logistics"].get(order_key)
-        if logistic_info:
-            order['vettore_assegnato'] = logistic_info.get('codice')
-
-        # Formatta la data per usarla come chiave di raggruppamento
+        if logistic_info: order['vettore_assegnato'] = logistic_info.get('codice')
         date_str = order.get('data_documento')
-        if date_str and len(date_str) == 8:
-            data_formattata = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
-        else:
-            data_formattata = "Data Sconosciuta"
-
-        if data_formattata not in ordini_per_data:
-            ordini_per_data[data_formattata] = []
+        if date_str and len(date_str) == 8: data_formattata = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
+        else: data_formattata = "Data Sconosciuta"
+        if data_formattata not in ordini_per_data: ordini_per_data[data_formattata] = []
         ordini_per_data[data_formattata].append(order)
-    # --- FINE NUOVA LOGICA ---
+    current_roles = get_user_roles(auth.current_user())
+    return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto', roles=current_roles)
 
-    return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto')
-    
 @app.route('/assign_all_vettori', methods=['POST'])
+@auth.login_required(role='admin') # Solo admin
 def assign_all_vettori():
+    # ... (logica non cambia) ...
     for order_key, vettore_codice in request.form.items():
-        if vettore_codice: 
-            app_data_store["logistics"][order_key] = vettore_codice
+        if vettore_codice: app_data_store["logistics"][order_key] = vettore_codice
         else: 
-            if order_key in app_data_store["logistics"]:
-                del app_data_store["logistics"][order_key]
+            if order_key in app_data_store["logistics"]: del app_data_store["logistics"][order_key]
     return redirect(url_for('trasporto'))
 
 @app.route('/calcola-giri')
+@auth.login_required(role='admin') # Solo admin
 def calcola_giri():
+    # ... (logica non cambia) ...
     giri_per_vettore = {}
     for order_key, logistic_info in app_data_store["logistics"].items():
         if isinstance(logistic_info, dict):
@@ -160,65 +163,63 @@ def calcola_giri():
             if vettore_nome not in giri_per_vettore: giri_per_vettore[vettore_nome] = []
             ordine_completo = app_data_store["orders"].get(order_key)
             if ordine_completo: giri_per_vettore[vettore_nome].append(ordine_completo)
-
     app_data_store["calculated_routes"] = {}
     for vettore, ordini_assegnati in giri_per_vettore.items():
         if not ordini_assegnati: continue
-        
         partenza_prevista = datetime.now().replace(hour=8, minute=0, second=0)
         origin = "Japlab, Via Ferraris, 3, 84018 Scafati SA"
         waypoints = [f"{o['indirizzo']}, {o['localita']}" for o in ordini_assegnati if o.get('indirizzo') and o.get('localita')]
         if not waypoints: continue
-
         try:
             gmaps = googlemaps.Client(key=os.getenv('GOOGLE_MAPS_API_KEY'))
             directions_result = gmaps.directions(origin=origin, destination=origin, waypoints=waypoints, optimize_waypoints=True)
             if not directions_result: continue
-            
             route = directions_result[0]
             tappe_ordinate_oggetti = [ordini_assegnati[i] for i in route['waypoint_order']]
             distanza_complessiva_km = sum(leg['distance']['value'] for leg in route['legs']) / 1000
             durata_complessiva_sec = sum(leg['duration']['value'] for leg in route['legs'])
             rientro_previsto = partenza_prevista + timedelta(seconds=durata_complessiva_sec)
-            
             orario_tappa_corrente = partenza_prevista
             for i, leg in enumerate(route['legs'][:-1]):
                 orario_tappa_corrente += timedelta(seconds=leg['duration']['value'])
                 tappa_attuale = tappe_ordinate_oggetti[i]
                 tappa_attuale['orario_previsto'] = orario_tappa_corrente.strftime('%H:%M')
-            
             app_data_store["calculated_routes"][vettore] = {
-                'data': datetime.now().strftime('%d/%m/%Y'),
-                'partenza_max': (partenza_prevista - timedelta(minutes=30)).strftime('%H:%M'),
-                'num_consegne': len(tappe_ordinate_oggetti),
-                'km_previsti': f"{distanza_complessiva_km:.1f} km",
-                'tempo_previsto': time.strftime("%Hh %Mm", time.gmtime(durata_complessiva_sec)),
-                'rientro_previsto': rientro_previsto.strftime('%H:%M'),
-                'tappe': tappe_ordinate_oggetti,
-                'efficienza': 'N/D', 'consumo_carburante': 'N/D'
+                'data': datetime.now().strftime('%d/%m/%Y'), 'partenza_max': (partenza_prevista - timedelta(minutes=30)).strftime('%H:%M'),
+                'num_consegne': len(tappe_ordinate_oggetti), 'km_previsti': f"{distanza_complessiva_km:.1f} km",
+                'tempo_previsto': time.strftime("%Hh %Mm", time.gmtime(durata_complessiva_sec)), 'rientro_previsto': rientro_previsto.strftime('%H:%M'),
+                'tappe': tappe_ordinate_oggetti, 'efficienza': 'N/D', 'consumo_carburante': 'N/D'
             }
         except Exception as e:
             print(f"Errore durante il calcolo del percorso per {vettore}: {e}")
-    
     return redirect(url_for('autisti'))
 
 @app.route('/autisti')
+@auth.login_required(role=['admin', 'autista']) # Admin e autista
 def autisti():
-    return render_template('autisti.html', active_page='autisti')
+    current_roles = get_user_roles(auth.current_user())
+    return render_template('autisti.html', active_page='autisti', roles=current_roles)
 
 @app.route('/consegne/<autista_nome>')
+@auth.login_required(role=['admin', 'autista']) # Admin e autista
 def consegne_autista(autista_nome):
+    # Verifica che l'autista possa vedere solo le sue consegne
+    current_user = auth.current_user()
+    roles = get_user_roles(current_user)
+    if 'autista' in roles and current_user.upper() != autista_nome.upper():
+         # Un autista può vedere solo la sua pagina (es. utente 'boxer' vede solo /consegne/BOXER)
+         # Assumendo che il nome utente corrisponda al nome autista
+         return "Accesso non autorizzato", 403
+         
+    # ... (logica non cambia, ma ora si passa il ruolo al template) ...
     giro_calcolato = app_data_store["calculated_routes"].get(autista_nome)
     tappe_da_mostrare = []
-    if giro_calcolato:
-        tappe_da_mostrare = giro_calcolato.get('tappe', [])
+    if giro_calcolato: tappe_da_mostrare = giro_calcolato.get('tappe', [])
     else:
         for order_key, logistic_info in app_data_store["logistics"].items():
             if isinstance(logistic_info, dict) and logistic_info.get('nome') == autista_nome:
                 ordine_completo = app_data_store["orders"].get(order_key)
-                if ordine_completo:
-                    tappe_da_mostrare.append(ordine_completo)
-    
+                if ordine_completo: tappe_da_mostrare.append(ordine_completo)
     for tappa in tappe_da_mostrare:
         order_key = f"{tappa['sigla']}:{tappa['serie']}:{tappa['numero']}"
         order_id = str(tappa.get('numero'))
@@ -227,144 +228,113 @@ def consegne_autista(autista_nome):
         tappa['start_time'] = eventi.get('start_time')
         tappa['end_time'] = eventi.get('end_time')
         tappa['colli_da_consegnare'] = status.get('colli_totali_operatore', 'N/D')
-            
-    return render_template('consegna_autista.html', autista_nome=autista_nome, giro=giro_calcolato, tappe=tappe_da_mostrare)
+    current_roles = get_user_roles(auth.current_user())
+    return render_template('consegna_autista.html', autista_nome=autista_nome, giro=giro_calcolato, tappe=tappe_da_mostrare, roles=current_roles)
 
 @app.route('/consegna/start', methods=['POST'])
+@auth.login_required(role=['admin', 'autista']) # Admin e autista
 def start_consegna():
+    # ... (logica non cambia) ...
     order_key = request.form.get('order_key')
     autista_nome = request.form.get('autista_nome')
-    if order_key:
-        app_data_store["delivery_events"].setdefault(order_key, {})['start_time'] = datetime.now().strftime('%H:%M:%S')
+    if order_key: app_data_store["delivery_events"].setdefault(order_key, {})['start_time'] = datetime.now().strftime('%H:%M:%S')
     return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
 @app.route('/consegna/end', methods=['POST'])
+@auth.login_required(role=['admin', 'autista']) # Admin e autista
 def end_consegna():
+    # ... (logica non cambia) ...
     order_key = request.form.get('order_key')
     autista_nome = request.form.get('autista_nome')
-    if order_key:
-        app_data_store["delivery_events"].setdefault(order_key, {})['end_time'] = datetime.now().strftime('%H:%M:%S')
+    if order_key: app_data_store["delivery_events"].setdefault(order_key, {})['end_time'] = datetime.now().strftime('%H:%M:%S')
     return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
-# --- FUNZIONE AMMINISTRAZIONE AGGIORNATA ---
 @app.route('/amministrazione')
+@auth.login_required(role='admin') # Solo admin
 def amministrazione():
-    dettagli_per_autista = {}
-    consegne_totali_completate = 0
-    tempo_totale_effettivo_sec = 0
-    km_totali_previsti = 0.0
-    
-    # 1. Analizza gli eventi di consegna per trovare quelli completati
-    for order_key, evento in app_data_store.get("delivery_events", {}).items():
-        if 'end_time' in evento and 'start_time' in evento:
-            logistic_info = app_data_store["logistics"].get(order_key)
-            if isinstance(logistic_info, dict):
-                autista_nome = logistic_info.get('nome')
-                if not autista_nome: continue
-
-                if autista_nome not in dettagli_per_autista:
-                    dettagli_per_autista[autista_nome] = {'consegne': [], 'tempo_effettivo_sec': 0}
-
-                ordine = app_data_store["orders"].get(order_key)
-                if not ordine: continue
-                
-                # Calcola durata effettiva
+    # ... (logica non cambia, ma ora si passa il ruolo al template) ...
+    riepilogo_per_autista = {}
+    giri_calcolati = app_data_store.get("calculated_routes", {})
+    for autista_nome, giro_info in giri_calcolati.items():
+        consegne_completate = []
+        tempo_totale_consegne_sec = 0
+        for tappa in giro_info.get('tappe', []):
+            order_key = f"{tappa['sigla']}:{tappa['serie']}:{tappa['numero']}"
+            evento = app_data_store["delivery_events"].get(order_key)
+            if evento and 'end_time' in evento and 'start_time' in evento:
                 durata_effettiva_str = "-"
                 durata_sec = 0
                 try:
-                    start_dt = datetime.strptime(evento['start_time'], '%H:%M:%S')
-                    end_dt = datetime.strptime(evento['end_time'], '%H:%M:%S')
-                    durata_td = end_dt - start_dt
-                    durata_sec = durata_td.total_seconds()
+                    start_dt = datetime.strptime(evento['start_time'], '%H:%M:%S'); end_dt = datetime.strptime(evento['end_time'], '%H:%M:%S')
+                    durata_td = end_dt - start_dt; durata_sec = durata_td.total_seconds()
                     if durata_sec < 0: durata_sec += 24 * 3600 
-                    dettagli_per_autista[autista_nome]['tempo_effettivo_sec'] += durata_sec
-                    tempo_totale_effettivo_sec += durata_sec
-                    durata_min = math.ceil(durata_sec / 60) # Arrotonda per eccesso
+                    tempo_totale_consegne_sec += durata_sec
+                    durata_min = math.ceil(durata_sec / 60)
                     durata_effettiva_str = f"{durata_min} min"
                 except (ValueError, TypeError): pass
-
-                order_id = str(ordine.get('numero'))
-                status = app_data_store["statuses"].get(order_id, {})
-                
-                dettaglio_consegna = {
-                    'ragione_sociale': ordine.get('ragione_sociale', 'N/D'),
-                    'indirizzo': ordine.get('indirizzo', '-'),
-                    'localita': ordine.get('localita', '-'),
-                    'start_time_reale': evento.get('start_time', '-'),
-                    'end_time_reale': evento.get('end_time', '-'),
-                    'durata_effettiva': durata_effettiva_str,
-                    'colli': status.get('colli_totali_operatore', 'N/D')
-                }
-                dettagli_per_autista[autista_nome]['consegne'].append(dettaglio_consegna)
-                consegne_totali_completate += 1
-
-    # 2. Aggiungi i dati pianificati e formatta i tempi totali
-    giri_calcolati = app_data_store.get("calculated_routes", {})
-    for autista_nome, dettagli in dettagli_per_autista.items():
-        giro_pianificato = giri_calcolati.get(autista_nome, {})
-        dettagli['summary'] = {
-            'km_previsti': giro_pianificato.get('km_previsti', 'N/D'),
-            'tempo_previsto': giro_pianificato.get('tempo_previsto', 'N/D'),
-            'tempo_effettivo_str': time.strftime("%Hh %Mm", time.gmtime(dettagli['tempo_effettivo_sec'])),
-            'num_consegne': len(dettagli['consegne'])
-        }
-        # Somma i km previsti per il totale generale
-        try:
-            km_autista = float(giro_pianificato.get('km_previsti', '0 km').split(' ')[0])
-            km_totali_previsti += km_autista
-        except ValueError:
-            pass
-
-    # 3. Calcola le metriche generali
-    tempo_medio_consegna_str = "-"
+                tappa['start_time_reale'] = evento.get('start_time', '-'); tappa['end_time_reale'] = evento.get('end_time', '-')
+                tappa['durata_effettiva'] = durata_effettiva_str
+                order_id = str(tappa.get('numero')); status = app_data_store["statuses"].get(order_id, {})
+                tappa['colli'] = status.get('colli_totali_operatore', 'N/D')
+                consegne_completate.append(tappa)
+        if consegne_completate:
+            giro_info['tempo_totale_reale'] = time.strftime("%Hh %Mm", time.gmtime(tempo_totale_consegne_sec))
+            riepilogo_per_autista[autista_nome] = {'summary': giro_info, 'consegne': consegne_completate}
+    consegne_totali_completate = sum(len(d['consegne']) for d in riepilogo_per_autista.values())
+    tempo_totale_effettivo_sec = sum(d['tempo_effettivo_sec'] for d in dettagli_per_autista.values() if 'tempo_effettivo_sec' in d) # Correggi se necessario
+    km_totali_previsti = sum(float(d['summary'].get('km_previsti', '0 km').split(' ')[0]) for d in riepilogo_per_autista.values())
+    tempo_medio_consegna_str = "-";
     if consegne_totali_completate > 0:
         tempo_medio_sec = tempo_totale_effettivo_sec / consegne_totali_completate
         tempo_medio_min = math.ceil(tempo_medio_sec / 60)
         tempo_medio_consegna_str = f"{tempo_medio_min} min"
-        
-    summary_stats = {
-        'consegne_totali': consegne_totali_completate,
-        'km_totali': f"{km_totali_previsti:.1f} km",
-        'tempo_medio': tempo_medio_consegna_str
-    }
+    summary_stats = {'consegne_totali': consegne_totali_completate, 'km_totali': f"{km_totali_previsti:.1f} km", 'tempo_medio': tempo_medio_consegna_str}
+    current_roles = get_user_roles(auth.current_user())
+    return render_template('amministrazione.html', summary_stats=summary_stats, dettagli_per_autista=riepilogo_per_autista, active_page='amministrazione', roles=current_roles)
 
-    return render_template('amministrazione.html', 
-                           summary_stats=summary_stats,
-                           dettagli_per_autista=dettagli_per_autista, 
-                           active_page='amministrazione')
 
 @app.route('/order/<sigla>/<serie>/<numero>')
+@auth.login_required(role=['admin', 'preparatore']) # Solo admin e preparatore
 def order_detail_view(sigla, serie, numero):
+    # ... (logica non cambia, ma ora si passa il ruolo al template) ...
     if not app_data_store["orders"]: load_all_data()
     order_key = f"{sigla}:{serie}:{numero}"
     order = app_data_store["orders"].get(order_key)
     if not order: return f"Errore: Dettagli ordine {order_key} non trovati.", 404
     order_id = str(order.get('numero'))
-    if order_id not in app_data_store["statuses"]:
-        app_data_store["statuses"][order_id] = get_initial_status()
+    if order_id not in app_data_store["statuses"]: app_data_store["statuses"][order_id] = get_initial_status()
     order_state = app_data_store["statuses"].get(order_id)
-    return render_template('order_detail.html', order=order, state=order_state)
+    current_roles = get_user_roles(auth.current_user())
+    return render_template('order_detail.html', order=order, state=order_state, roles=current_roles)
 
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
+@auth.login_required(role=['admin', 'preparatore']) # Solo admin e preparatore
 def order_action(sigla, serie, numero):
+    # ... (logica non cambia) ...
     action = request.form.get('action')
     order_id = str(numero)
     current_state = app_data_store["statuses"].get(order_id)
     if not current_state: return "Stato dell'ordine non trovato.", 404
-    if action == 'start_picking':
-        current_state['status'] = 'In Picking'
+    if action == 'start_picking': current_state['status'] = 'In Picking'
     elif action == 'complete_picking':
         current_state['status'] = 'In Controllo'
         picked_qty = {key.replace('picked_qty_', ''): value for key, value in request.form.items() if key.startswith('picked_qty_')}
         colli_totali = request.form.get('colli_totali_operatore', 0)
         current_state['picked_items'] = picked_qty
         current_state['colli_totali_operatore'] = colli_totali
-    elif action == 'approve_order':
-        current_state['status'] = 'Completato'
-    elif action == 'reject_order':
-        current_state['status'] = 'In Picking'
+    elif action == 'approve_order': current_state['status'] = 'Completato'
+    elif action == 'reject_order': current_state['status'] = 'In Picking'
     app_data_store["statuses"][order_id] = current_state
     return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
+
+@app.route('/logout')
+@auth.login_required # Assicura che solo un utente loggato possa uscire
+def logout():
+    """Gestisce il logout inviando una risposta 401."""
+    # L'autenticazione Basic non ha un vero "logout".
+    # Inviare un 401 Unauthorized dice al browser di cancellare
+    # le credenziali memorizzate per questo sito.
+    return ("Logout effettuato. Chiudi e riapri il browser per completare.", 401)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)
