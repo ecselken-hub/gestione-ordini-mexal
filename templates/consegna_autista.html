@@ -1,56 +1,75 @@
 {% extends "base.html" %}
 
-{% block title %}Giro {{ autista_nome }}{% endblock %}
+{% block title %}Giro di {{ autista_nome }}{% endblock %}
 
 {% block content %}
 <div class="header">
-    <h1>Giro {{ autista_nome }}</h1>
+    <h1>Giro di {{ autista_nome }}</h1>
     <a href="{{ url_for('autisti') }}" class="btn btn-secondary">Cambia</a>
 </div>
 
 {% if giro %}
     <div class="card">
-        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; text-align: center;">
-            <div class="p-2"><div style="font-size: 0.8rem; color: var(--secondary-text-color);">DATA</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.data }}</div></div>
-            <div class="p-2"><div style="font-size: 0.8rem; color: var(--secondary-text-color);">N° Consegne</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.num_consegne }}</div></div>
-            <div class="p-2"><div style="font-size: 0.8rem; color: var(--secondary-text-color);">Km Previsti</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.km_previsti }}</div></div>
-            <div class="p-2"><div style="font-size: 0.8rem; color: var(--secondary-text-color);">Tempo Previsto</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.tempo_previsto }}</div></div>
+        <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; text-align: center;">
+            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">DATA</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.data }}</div></div>
+            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">N° CONSEGNE</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.num_consegne }}</div></div>
+            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">KM PREVISTI</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.km_previsti.split(' ')[0] }}</div></div>
+            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">TEMPO PREVISTO</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.tempo_previsto }}</div></div>
         </div>
     </div>
-    <h2 style="margin-top: 2.5rem; margin-bottom: 1rem; font-size: 1.5rem;">Giro Ottimizzato</h2>
+    <h2 style="margin-top: 2.5rem; margin-bottom: 1rem; font-size: 1.5rem;">Tappe Ottimizzate</h2>
 {% endif %}
 
 {% if tappe %}
     {% for tappa in tappe %}
     <div class="card">
         <div class="card-header" style="font-weight: 600;">
-            {% if giro %}Cliente {{ loop.index }}: {% endif %}{{ tappa.ragione_sociale }}
+            {% if giro %}Tappa {{ loop.index }}: {% endif %}{{ tappa.ragione_sociale }} - <span style="color: var(--secondary-text-color);">{{ tappa.localita }}</span>
         </div>
         <div class="card-body">
             <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 1rem;">
                 <div>
-                    <p><strong>Indirizzo:</strong><br>{{ tappa.indirizzo }}, {{ tappa.localita }}</p>
-                    <p><strong>Telefono:</strong> {{ tappa.telefono }}</p>
-                    {% if tappa.nota %}<p><strong>Note:</strong> <span style="color: var(--danger-color);">{{ tappa.nota }}</span></p>{% endif %}
-                    <p><strong>Orario:</strong> {{ tappa.orario1_start or 'N/D' }} - {{ tappa.orario1_end or 'N/D' }}{% if tappa.orario_previsto %}<br><strong>Previsto:</strong> {{ tappa.orario_previsto }}{% endif %}</p>
-                    <p><strong>Pagamento:</strong> {{ tappa.pagamento_desc }} | <strong>Colli:</strong> {{ tappa.colli_da_consegnare }}</p>
+                    <p style="margin: 0;"><strong>📍 Indirizzo:</strong> {{ tappa.indirizzo }}, {{ tappa.localita }}</p>
+                    <p style="margin: 4px 0 0 0;"><strong>📞 Telefono:</strong> {{ tappa.telefono }}</p>
+                    {% if tappa.nota %}<p style="margin: 4px 0 0 0;"><strong>📝 Note:</strong> <span style="color: var(--danger-color);">{{ tappa.nota }}</span></p>{% endif %}
+                    
+                    <p style="border-top: 1px solid var(--separator-color); padding-top: 1rem; margin-top: 1rem; margin-bottom: 0;">
+                        {% if tappa.orario1_start and tappa.orario1_end %}
+                            <strong>🕒 Finestra:</strong> {{ tappa.orario1_start }} - {{ tappa.orario1_end }}
+                        {% endif %}
+                        {% if tappa.orario_previsto %}
+                             {% if tappa.orario1_start %}<br>{% endif %} <strong>Orario Previsto:</strong> <span style="font-weight: 600; color: var(--accent-color);">{{ tappa.orario_previsto }}</span>
+                        {% endif %}
+                    </p>
+                    
+                    <p style="border-top: 1px solid var(--separator-color); padding-top: 1rem; margin-top: 1rem; margin-bottom: 0;">
+                        <strong>Pagamento:</strong> {{ tappa.pagamento_desc }} | <strong>Colli:</strong> {{ tappa.colli_da_consegnare }}
+                    </p>
                 </div>
                 <div style="text-align: center; display: flex; flex-direction: column; justify-content: center; gap: 1rem;">
                     <a href="https://www.google.com/maps/dir/?api=1&destination={{ tappa.indirizzo|urlencode }},{{ tappa.localita|urlencode }}" target="_blank" class="btn btn-secondary">🗺️ MAPPA</a>
                     {% if not tappa.start_time %}
                         <form action="{{ url_for('start_consegna') }}" method="POST"><input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}"><input type="hidden" name="autista_nome" value="{{ autista_nome }}"><button type="submit" class="btn btn-primary" style="width: 100%;">Inizia</button></form>
                     {% elif not tappa.end_time %}
-                        <div style="font-size: 0.9rem;"><span class="badge bg-primary">Inizio: {{ tappa.start_time }}</span></div>
-                        <form action="{{ url_for('end_consegna') }}" method="POST"><input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}"><input type="hidden" name="autista_nome" value="{{ autista_nome }}"><button type="submit" class="btn btn-success" style="width: 100%;">Concludi</button></form>
+                        <div style="font-size: 0.9rem;"><span class="badge bg-primary">Iniziato: {{ tappa.start_time }}</span></div>
+                        <form action="{{ url_for('end_consegna') }}" method="POST"><input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}"><input type="hidden" name="autista_nome" value="{{ autista_nome }}"><button type="submit" class="btn btn-success" style="width: 100%;">Fine</button></form>
                     {% else %}
-                        <div style="font-size: 0.9rem;"><span class="badge bg-success">Finito</span></div>
+                        <div style="font-size: 0.9rem;"><span class="badge bg-success">Completato</span></div>
                     {% endif %}
                 </div>
             </div>
+             {% if tappa.start_time %}
+                <div style="text-align: center; margin-top: 1rem; font-size: 0.8rem;">
+                    <span class="badge bg-primary">Inizio: {{ tappa.start_time }}</span>
+                    {% if tappa.end_time %}
+                        <span class="badge bg-success">Fine: {{ tappa.end_time }}</span>
+                    {% endif %}
+                </div>
+            {% endif %}
         </div>
     </div>
     {% endfor %}
 {% else %}
-    <div class="card"><div class="card-body" style="text-align: center;"><a href="{{ url_for('trasporto') }}" style="color: var(--accent-color);">Assegnare gli ordini</a>.</div></div>
+    <div class="card"><div class="card-body" style="text-align: center;"><a href="{{ url_for('trasporto') }}" style="color: var(--accent-color);">Assegna ordini</a>.</div></div>
 {% endif %}
 {% endblock %}

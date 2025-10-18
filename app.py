@@ -5,6 +5,7 @@ import os
 import googlemaps
 from datetime import datetime, timedelta
 from collections import OrderedDict
+import math
 
 app = Flask(__name__)
 
@@ -248,45 +249,89 @@ def end_consegna():
 # --- FUNZIONE AMMINISTRAZIONE AGGIORNATA ---
 @app.route('/amministrazione')
 def amministrazione():
-    riepilogo_per_autista = {}
-    giri_calcolati = app_data_store.get("calculated_routes", {})
+    dettagli_per_autista = {}
+    consegne_totali_completate = 0
+    tempo_totale_effettivo_sec = 0
+    km_totali_previsti = 0.0
+    
+    # 1. Analizza gli eventi di consegna per trovare quelli completati
+    for order_key, evento in app_data_store.get("delivery_events", {}).items():
+        if 'end_time' in evento and 'start_time' in evento:
+            logistic_info = app_data_store["logistics"].get(order_key)
+            if isinstance(logistic_info, dict):
+                autista_nome = logistic_info.get('nome')
+                if not autista_nome: continue
 
-    for autista_nome, giro_info in giri_calcolati.items():
-        consegne_completate = []
-        tempo_totale_consegne_sec = 0
+                if autista_nome not in dettagli_per_autista:
+                    dettagli_per_autista[autista_nome] = {'consegne': [], 'tempo_effettivo_sec': 0}
 
-        for tappa in giro_info.get('tappe', []):
-            order_key = f"{tappa['sigla']}:{tappa['serie']}:{tappa['numero']}"
-            evento = app_data_store["delivery_events"].get(order_key)
-
-            if evento and 'end_time' in evento:
-                # Calcola la durata della singola consegna
-                try:
-                    start_time = datetime.strptime(evento['start_time'], '%H:%M:%S')
-                    end_time = datetime.strptime(evento['end_time'], '%H:%M:%S')
-                    durata = end_time - start_time
-                    tempo_totale_consegne_sec += durata.total_seconds()
-                except (ValueError, TypeError):
-                    pass # Ignora se gli orari non sono validi
-
-                tappa['start_time_reale'] = evento.get('start_time', '-')
-                tappa['end_time_reale'] = evento.get('end_time', '-')
+                ordine = app_data_store["orders"].get(order_key)
+                if not ordine: continue
                 
-                order_id = str(tappa.get('numero'))
+                # Calcola durata effettiva
+                durata_effettiva_str = "-"
+                durata_sec = 0
+                try:
+                    start_dt = datetime.strptime(evento['start_time'], '%H:%M:%S')
+                    end_dt = datetime.strptime(evento['end_time'], '%H:%M:%S')
+                    durata_td = end_dt - start_dt
+                    durata_sec = durata_td.total_seconds()
+                    if durata_sec < 0: durata_sec += 24 * 3600 
+                    dettagli_per_autista[autista_nome]['tempo_effettivo_sec'] += durata_sec
+                    tempo_totale_effettivo_sec += durata_sec
+                    durata_min = math.ceil(durata_sec / 60) # Arrotonda per eccesso
+                    durata_effettiva_str = f"{durata_min} min"
+                except (ValueError, TypeError): pass
+
+                order_id = str(ordine.get('numero'))
                 status = app_data_store["statuses"].get(order_id, {})
-                tappa['colli_da_consegnare'] = status.get('colli_totali_operatore', 'N/D')
+                
+                dettaglio_consegna = {
+                    'ragione_sociale': ordine.get('ragione_sociale', 'N/D'),
+                    'indirizzo': ordine.get('indirizzo', '-'),
+                    'localita': ordine.get('localita', '-'),
+                    'start_time_reale': evento.get('start_time', '-'),
+                    'end_time_reale': evento.get('end_time', '-'),
+                    'durata_effettiva': durata_effettiva_str,
+                    'colli': status.get('colli_totali_operatore', 'N/D')
+                }
+                dettagli_per_autista[autista_nome]['consegne'].append(dettaglio_consegna)
+                consegne_totali_completate += 1
 
-                consegne_completate.append(tappa)
+    # 2. Aggiungi i dati pianificati e formatta i tempi totali
+    giri_calcolati = app_data_store.get("calculated_routes", {})
+    for autista_nome, dettagli in dettagli_per_autista.items():
+        giro_pianificato = giri_calcolati.get(autista_nome, {})
+        dettagli['summary'] = {
+            'km_previsti': giro_pianificato.get('km_previsti', 'N/D'),
+            'tempo_previsto': giro_pianificato.get('tempo_previsto', 'N/D'),
+            'tempo_effettivo_str': time.strftime("%Hh %Mm", time.gmtime(dettagli['tempo_effettivo_sec'])),
+            'num_consegne': len(dettagli['consegne'])
+        }
+        # Somma i km previsti per il totale generale
+        try:
+            km_autista = float(giro_pianificato.get('km_previsti', '0 km').split(' ')[0])
+            km_totali_previsti += km_autista
+        except ValueError:
+            pass
 
-        if consegne_completate:
-            # Aggiunge il tempo totale calcolato al riepilogo
-            giro_info['tempo_totale_reale'] = time.strftime("%Hh %Mm", time.gmtime(tempo_totale_consegne_sec))
-            riepilogo_per_autista[autista_nome] = {
-                'summary': giro_info,
-                'consegne': consegne_completate
-            }
-            
-    return render_template('amministrazione.html', riepilogo_per_autista=riepilogo_per_autista, active_page='amministrazione')
+    # 3. Calcola le metriche generali
+    tempo_medio_consegna_str = "-"
+    if consegne_totali_completate > 0:
+        tempo_medio_sec = tempo_totale_effettivo_sec / consegne_totali_completate
+        tempo_medio_min = math.ceil(tempo_medio_sec / 60)
+        tempo_medio_consegna_str = f"{tempo_medio_min} min"
+        
+    summary_stats = {
+        'consegne_totali': consegne_totali_completate,
+        'km_totali': f"{km_totali_previsti:.1f} km",
+        'tempo_medio': tempo_medio_consegna_str
+    }
+
+    return render_template('amministrazione.html', 
+                           summary_stats=summary_stats,
+                           dettagli_per_autista=dettagli_per_autista, 
+                           active_page='amministrazione')
 
 @app.route('/order/<sigla>/<serie>/<numero>')
 def order_detail_view(sigla, serie, numero):
