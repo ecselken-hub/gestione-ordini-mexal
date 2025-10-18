@@ -37,27 +37,26 @@
                     <div style="flex-grow: 1;">
                         <p style="font-weight: 600; margin: 0 0 4px 0;">{{ item.descr_articolo }}</p>
                         <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">Cod: {{ item.codice_articolo }}</p>
-                         <div style="margin-top: 8px;">
-                            <span style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">Ordinati:</span>
-                            <span style="font-weight: 600; font-size: 1rem; color: var(--primary-text-color);">
-                                {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
-                                    {{ item.nr_colli }} * {{ (item.quantita / item.nr_colli) | int }}
-                                {% else %}
-                                    {{ item.quantita }}
-                                {% endif %}
-                            </span>
+                    </div>
+                    <div style="text-align: center; min-width: 80px;">
+                        <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">Ordinati</div>
+                        <div style="font-weight: 700; font-size: 1.5rem; color: var(--primary-text-color);">
+                            {% if item.nr_colli and item.nr_colli > 0 and item.quantita %}
+                                {{ item.nr_colli }} * {{ (item.quantita / item.nr_colli) | int }}
+                            {% else %}
+                                {{ item.quantita }}
+                            {% endif %}
                         </div>
                     </div>
-                    
                     <div class="stepper">
-                        <button type="button" class="stepper-btn stepper-plus" {% if state.status != 'In Picking' %}disabled{% endif %}>+</button>
+                        <button type="button" class="stepper-btn stepper-minus" {% if state.status != 'In Picking' %}disabled{% endif %}>-</button>
                         <input type="number" 
                                id="picked_qty_{{ item.codice_articolo }}"
                                name="picked_qty_{{ item.codice_articolo }}" 
                                value="{{ state.picked_items.get(item.codice_articolo, '0') }}"
                                min="0"
                                {% if state.status != 'In Picking' %}readonly{% endif %}>
-                        <button type="button" class="stepper-btn stepper-minus" {% if state.status != 'In Picking' %}disabled{% endif %}>-</button>
+                        <button type="button" class="stepper-btn stepper-plus" {% if state.status != 'In Picking' %}disabled{% endif %}>+</button>
                     </div>
                 </div>
                 {% endfor %}
@@ -69,6 +68,7 @@
         <div style="padding: 1.5rem; background-color: #f9f9f9; border-top: 1px solid var(--separator-color);">
             {% if state.status == 'Da Lavorare' %}
                 <button type="submit" name="action" value="start_picking" class="btn btn-primary" style="width: 100%;">Avvia Picking</button>
+            
             {% elif state.status == 'In Picking' %}
                 <div style="display: flex; gap: 1rem; align-items: flex-end;">
                     <div>
@@ -77,15 +77,17 @@
                     </div>
                     <button type="submit" name="action" value="complete_picking" class="btn btn-success" style="flex-grow: 1;">Completa Picking</button>
                 </div>
+
             {% elif state.status == 'In Controllo' %}
                  <p style="font-size: 1.1rem; margin-top: 0;"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore }}</strong></p>
-                 <div style="margin-top: 1rem; display: flex; gap: 1rem;">
+                 <div style="margin-top: 1rem; display: flex; gap: 1rem; align-items: center;">
                      <button type="submit" name="action" value="approve_order" class="btn btn-success">Approva Ordine</button>
                      <button type="submit" name="action" value="reject_order" class="btn btn-danger">Rimanda al Picking</button>
                  </div>
+            
             {% elif state.status == 'Completato' %}
-                 <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px; font-weight: 600; text-align: center;">
-                     ✔️ Ordine Completato
+                 <div style="background-color: #e5f7ea; color: #34c759; padding: 1rem; border-radius: 10px; font-weight: 600; text-align: center; display:flex; justify-content: space-between; align-items: center;">
+                     <span>✔️ Ordine Completato</span>
                  </div>
             {% endif %}
         </div>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - JapLab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root { /* Stessi colori di base.html */
+            --bg-color: #f5f5f7;
+            --card-bg-color: #ffffff;
+            --primary-text-color: #1d1d1f;
+            --secondary-text-color: #86868b;
+            --accent-color: #007aff;
+            --danger-color: #ff3b30;
+            --success-color: #30d158;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background-color: var(--card-bg-color);
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        .login-container h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        .login-container p {
+            color: var(--secondary-text-color);
+            margin-bottom: 2rem;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border-radius: 10px;
+            border: 1px solid #d1d1d6;
+            background-color: #f8f8f8;
+            font-size: 1rem;
+            box-sizing: border-box; /* Importante per padding e width */
+        }
+        .btn { display: inline-block; padding: 12px 22px; font-size: 1rem; font-weight: 600; border-radius: 12px; text-decoration: none; border: none; cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; width: 100%; }
+        .btn-primary { background-color: var(--accent-color); color: white; }
+        .alert { padding: 1rem; margin-bottom: 1.5rem; border-radius: 10px; font-weight: 500; }
+        .alert-danger { background-color: #ffebe9; color: var(--danger-color); border: 1px solid var(--danger-color); }
+        .alert-success { background-color: #e5f7ea; color: var(--success-color); border: 1px solid var(--success-color); }
+        .alert-info { background-color: #e0f2ff; color: var(--accent-color); border: 1px solid var(--accent-color); }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Accedi</h1>
+        <p>Inserisci le tue credenziali</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            {{ form.hidden_tag() }} <div class="form-group">
+                {{ form.username.label }}
+                {{ form.username(class="form-control") }}
+            </div>
+            <div class="form-group">
+                {{ form.password.label }}
+                {{ form.password(class="form-control") }}
+            </div>
+            {{ form.submit(class="btn btn-primary") }}
+        </form>
+    </div>
+</body>
+</html>

@@ -15,6 +15,7 @@
             
             <div style="margin-bottom: 2.5rem;">
                 {% for order in ordini_del_giorno %}
+                {% set order_key = order.sigla ~ ':' ~ order.serie ~ ':' ~ order.numero %}
                 <div class="card">
                     <div class="card-body" style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
                         <div>
@@ -23,18 +24,21 @@
                                 📍 {{ order.indirizzo }}, {{ order.localita }}
                             </p>
                         </div>
-                        <div>
-                            <label style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">Assegna Autista:</label>
-                            <select name="{{ order.sigla }}:{{ order.serie }}:{{ order.numero }}" class="form-control form-select" style="padding: 8px 12px; margin-top: 4px;">
-                                <option value="">Nessuno</option>
-                                {% for vettore in vettori %}
-                                    <option value="{{ vettore.codice }}" {% if order.vettore_assegnato == vettore.codice %}selected{% endif %}>
-                                        {{ vettore.ragione_sociale or vettore.descrizione }}
-                                    </option>
-                                {% endfor %}
-                            </select>
+                        
+                        <div class="segmented-control">
+                            <input type="radio" name="vettore_{{ order_key }}" id="nessuno_{{ order.numero }}" value="" {% if not order.vettore_assegnato %}checked{% endif %}>
+                            <label for="nessuno_{{ order.numero }}">Nessuno</label>
+                            {% for vettore in vettori %}
+                                <input type="radio" name="vettore_{{ order_key }}" id="{{ vettore.codice }}_{{ order.numero }}" value="{{ vettore.codice }}" {% if order.vettore_assegnato == vettore.codice %}checked{% endif %}>
+                                <label for="{{ vettore.codice }}_{{ order.numero }}">{{ vettore.ragione_sociale or vettore.descrizione }}</label>
+                            {% endfor %}
                         </div>
-                    </div>
+
+                        <div>
+                            <label for="nota_autista_{{ order_key }}" style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">Note per Autista:</label>
+                            <input type="text" name="nota_autista_{{ order_key }}" id="nota_autista_{{ order_key }}" class="form-control" value="{{ order.nota_autista }}" placeholder="Es: Contattare Sig. Rossi" style="padding: 8px 12px; margin-top: 4px;">
+                        </div>
+                        </div>
                 </div>
                 {% endfor %}
             </div>
@@ -47,7 +51,7 @@
         </div>
     {% endif %}
 
-    <div style="position: sticky; bottom: 95px; /* Appena sopra la tab bar */ display: flex; justify-content: center; gap: 1rem; background-color: rgba(245, 245, 247, 0.8); backdrop-filter: blur(10px); padding: 1rem; border-radius: 16px; box-shadow: 0 -4px 15px rgba(0,0,0,0.05);">
+    <div style="position: sticky; bottom: 95px; display: flex; justify-content: center; gap: 1rem; background-color: rgba(245, 245, 247, 0.8); backdrop-filter: blur(10px); padding: 1rem; border-radius: 16px; box-shadow: 0 -4px 15px rgba(0,0,0,0.05);">
         <button type="submit" class="btn btn-primary">Salva Assegnazioni</button>
         <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giri</a>
     </div>

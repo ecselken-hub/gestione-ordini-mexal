@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Amministrazione{% endblock %}
+{% block title %}Pannello Amministrazione{% endblock %}
 
 {% block content %}
 <style>
-    /* Stili specifici per la pagina admin */
+    /* ... (Stili KPI, Driver section, tabelle rimangono simili a prima) ... */
     .kpi-card { background-color: var(--card-bg-color); border-radius: 12px; padding: 1.5rem; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 1rem; }
     .kpi-label { font-size: 0.9rem; color: var(--secondary-text-color); font-weight: 500; text-transform: uppercase; margin-bottom: 0.5rem; }
     .kpi-value { font-size: 2.5rem; font-weight: 700; color: var(--primary-text-color); line-height: 1.1; }
@@ -20,16 +20,28 @@
     .table tbody tr:nth-child(odd) { background-color: #fdfdff; }
     .table strong { font-weight: 600; }
     .table .text-muted { color: var(--secondary-text-color); font-size: 0.85em;}
+
+    /* Stile per il contenitore del grafico */
+    .chart-container {
+        position: relative;
+        height: 300px; /* Altezza del grafico */
+        width: 100%;
+        margin-bottom: 2rem;
+    }
 </style>
 
 <div class="header">
     <h1>Pannello Amministrazione</h1>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 3rem;">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.5rem; margin-bottom: 3rem;">
     <div class="kpi-card">
         <div class="kpi-label">Consegne Completate</div>
         <div class="kpi-value">{{ summary_stats.consegne_totali }}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Consegne in Corso</div>
+        <div class="kpi-value accent">{{ summary_stats.consegne_in_corso }}</div>
     </div>
     <div class="kpi-card">
         <div class="kpi-label">Km Totali Previsti</div>
@@ -41,13 +53,22 @@
     </div>
 </div>
 
+<div class="card">
+    <div class="card-header">Consegne Completate per Ora</div>
+    <div class="card-body">
+        <div class="chart-container">
+            <canvas id="consegneOraChart"></canvas>
+        </div>
+    </div>
+</div>
+
 {% if dettagli_per_autista %}
     {% for autista, data in dettagli_per_autista.items() %}
         <section class="driver-section">
             <h2 class="driver-header">🚚 {{ autista }}</h2>
             
             <div class="driver-summary card">
-                <div class="summary-item">
+                 <div class="summary-item">
                     <div class="summary-label">CONSEGNE</div>
                     <div class="summary-value">{{ data.summary.num_consegne }}</div>
                 </div>
@@ -61,19 +82,21 @@
                 </div>
                 <div class="summary-item">
                     <div class="summary-label">TEMPO IMPIEGATO</div>
-                    <div class="summary-value" style="color: var(--accent-color);">{{ data.summary.tempo_effettivo_str }}</div>
+                    <div class="summary-value" style="color: var(--accent-color);">{{ data.summary.tempo_totale_reale }}</div>
                 </div>
             </div>
 
             <div class="card">
-                <div class="card-header">Dettaglio Consegne Completate</div>
+                <div class="card-header">Dettaglio Consegne</div>
                 <div class="table-responsive">
                     <table class="table">
                         <thead>
                             <tr>
+                                <th>Stato</th>
                                 <th>Destinazione</th>
                                 <th>Cliente</th>
-                                <th>Colli</th> <th>Orari Reali</th>
+                                <th>Colli</th>
+                                <th>Orari Reali</th>
                                 <th>Durata</th>
                             </tr>
                         </thead>
@@ -81,15 +104,27 @@
                             {% for tappa in data.consegne %}
                                 <tr>
                                     <td>
+                                        {% if tappa.status == 'Completata' %}
+                                            <span class="badge bg-success">Completata</span>
+                                        {% elif tappa.status == 'In Corso' %}
+                                            <span class="badge bg-primary">In Corso</span>
+                                        {% else %}
+                                             <span class="badge bg-secondary">{{ tappa.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
                                         <strong>{{ tappa.indirizzo }}</strong><br>
                                         <span class="text-muted">{{ tappa.localita }}</span>
                                     </td>
                                     <td>{{ tappa.ragione_sociale }}</td>
-                                    <td style="font-weight: 700; font-size: 1.1rem; text-align: center;">
-                                        {{ tappa.colli }}
-                                    </td>
+                                    <td style="font-weight: 700; text-align: center;">{{ tappa.colli }}</td>
                                     <td>
-                                        <span class="badge bg-primary">{{ tappa.start_time_reale }}</span> → <span class="badge bg-success">{{ tappa.end_time_reale }}</span>
+                                        {% if tappa.start_time_reale != '-' %}
+                                            <span class="badge bg-primary">{{ tappa.start_time_reale }}</span>
+                                        {% endif %}
+                                        {% if tappa.end_time_reale != '-' %}
+                                             → <span class="badge bg-success">{{ tappa.end_time_reale }}</span>
+                                        {% endif %}
                                     </td>
                                     <td style="font-weight: 600;">{{ tappa.durata_effettiva }}</td>
                                 </tr>
@@ -102,9 +137,53 @@
     {% endfor %}
 {% else %}
     <div class="card">
-        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+         <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
             Nessuna consegna completata da visualizzare.
         </div>
     </div>
 {% endif %}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('consegneOraChart');
+        if (ctx) {
+            // Recupera i dati passati da Flask
+            const chartData = JSON.parse('{{ chart_data | tojson | safe }}');
+            
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: chartData.labels, // Ore (es: "8:00", "9:00")
+                    datasets: [{
+                        label: 'Numero Consegne Completate',
+                        data: chartData.data, // Conteggi per ogni ora
+                        backgroundColor: 'rgba(0, 122, 255, 0.6)', // Blu Apple con trasparenza
+                        borderColor: 'rgba(0, 122, 255, 1)',
+                        borderWidth: 1,
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                // Mostra solo numeri interi sull'asse Y
+                                stepSize: 1 
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false // Nasconde la legenda
+                        }
+                    }
+                }
+            });
+        }
+    });
+</script>
 {% endblock %}
