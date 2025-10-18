@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
+    <style>
         :root {
             --bg-color: #f5f5f7;
             --card-bg-color: #ffffff;
@@ -49,24 +49,24 @@
         .btn-secondary { background-color: #e5e5ea; color: var(--primary-text-color); }
         .btn-success { background-color: #30d158; color: white; }
         
-        /* --- STILI DELLO STEPPER AGGIORNATI --- */
+        /* --- STILI PER LO STEPPER VERTICALE --- */
         .stepper {
             display: flex;
-            flex-direction: column;
-            align-items: center;
-            background-color: transparent;
-            border-radius: 5px; /* Angoli più piccoli */
-            width: 200px; /* Più stretto */
-            height: 42px;  /* Più basso */
+            flex-direction: column; /* Imposta la direzione verticale */
+            align-items: center; /* Centra gli elementi orizzontalmente */
+            width: 60px; /* Larghezza fissa per il componente */
         }
         .stepper input[type="number"] {
-            width: 100%;
+            width: 100%; /* Occupa tutta la larghezza del contenitore */
             text-align: center;
-            border: none;
-            background-color: transparent;
-            font-weight: 300; /* Leggermente meno grassetto */
-            font-size: 1.1rem; /* Più piccolo */
+            border: 1px solid var(--separator-color); /* Bordo per separare */
+            border-radius: 6px; /* Angoli arrotondati */
+            background-color: #f8f8f8;
+            font-weight: 600;
+            font-size: 1.3rem; /* Dimensione del numero */
             color: var(--primary-text-color);
+            padding: 6px 0; /* Spazio sopra e sotto il numero */
+            margin: 4px 0; /* Spazio tra i pulsanti e l'input */
             -moz-appearance: textfield;
         }
         .stepper input[type="number"]::-webkit-outer-spin-button,
@@ -77,39 +77,33 @@
         .stepper-btn {
             background-color: transparent;
             border: none;
-            color: #007aff;
-            font-size: 1.2rem; /* Pulsanti più piccoli */
-            font-weight: 300;
+            color: var(--accent-color);
+            font-size: 1.8rem; /* Dimensione dei simboli +/- */
+            font-weight: 400;
             cursor: pointer;
-            padding: 0 10px; /* Meno spazio laterale */
-            line-height: 1;
+            padding: 0; /* Rimuovi padding laterale */
+            line-height: 1; /* Allineamento verticale */
+            width: 100%; /* Occupa tutta la larghezza */
+            height: 30px; /* Altezza del pulsante */
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         .stepper-btn:disabled { color: #d1d1d6; cursor: not-allowed; }
-        .stepper input[readonly] { background-color: #ffffff; }
+        .stepper input[readonly] { background-color: #e5e5ea; }
+        /* Stile aggiuntivo per nascondere il bordo di focus dell'input */
+        .stepper input[type="number"]:focus {
+            outline: none;
+            box-shadow: none;
+        }
     </style>
 </head>
 <body>
     <main class="container">
         {% block content %}{% endblock %}
     </main>
-
+    
     <nav class="tab-bar">
-        <a href="{{ url_for('ordini_list') }}" class="tab-item {% if active_page == 'ordini' %}active{% endif %}">
-            <div class="icon">📦</div>
-            <div>Ordini</div>
-        </a>
-        <a href="{{ url_for('trasporto') }}" class="tab-item {% if active_page == 'trasporto' %}active{% endif %}">
-            <div class="icon">🚚</div>
-            <div>Trasporto</div>
-        </a>
-        <a href="{{ url_for('autisti') }}" class="tab-item {% if active_page == 'autisti' %}active{% endif %}">
-            <div class="icon">👤</div>
-            <div>Autisti</div>
-        </a>
-        <a href="{{ url_for('amministrazione') }}" class="tab-item {% if active_page == 'amministrazione' %}active{% endif %}">
-            <div class="icon">📊</div>
-            <div>Admin</div>
-        </a>
-    </nav>
+       </nav>
 </body>
 </html>
