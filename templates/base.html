@@ -102,8 +102,24 @@
     <main class="container">
         {% block content %}{% endblock %}
     </main>
-    
+
     <nav class="tab-bar">
-       </nav>
+        <a href="{{ url_for('ordini_list') }}" class="tab-item {% if active_page == 'ordini' %}active{% endif %}">
+            <div class="icon">📦</div>
+            <div>Ordini</div>
+        </a>
+        <a href="{{ url_for('trasporto') }}" class="tab-item {% if active_page == 'trasporto' %}active{% endif %}">
+            <div class="icon">🚚</div>
+            <div>Trasporto</div>
+        </a>
+        <a href="{{ url_for('autisti') }}" class="tab-item {% if active_page == 'autisti' %}active{% endif %}">
+            <div class="icon">👤</div>
+            <div>Autisti</div>
+        </a>
+        <a href="{{ url_for('amministrazione') }}" class="tab-item {% if active_page == 'amministrazione' %}active{% endif %}">
+            <div class="icon">📊</div>
+            <div>Admin</div>
+        </a>
+    </nav>
 </body>
 </html>
