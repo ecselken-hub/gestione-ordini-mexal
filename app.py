@@ -574,22 +574,39 @@ def order_detail_view(sigla, serie, numero):
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
 @login_required
 def order_action(sigla, serie, numero):
-    # ... (logica invariata)
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')): return "Accesso non autorizzato", 403
+    
     action = request.form.get('action')
     order_id = str(numero)
     current_state = app_data_store["statuses"].get(order_id)
     if not current_state: return "Stato dell'ordine non trovato.", 404
+    
+    order_key = f"{sigla}:{serie}:{numero}"
+    order_info = app_data_store["orders"].get(order_key, {})
+    order_name = f"#{order_id} ({order_info.get('ragione_sociale', 'N/D')})"
+
     if action == 'start_picking': current_state['status'] = 'In Picking'
     elif action == 'complete_picking':
         current_state['status'] = 'In Controllo'
-        picked_qty = {key.replace('picked_qty_', ''): value for key, value in request.form.items() if key.startswith('picked_qty_')}
+        picked_qty = {key.replace('picked_qty_', ''): val for key, val in request.form.items() if key.startswith('picked_qty_')}
         colli_totali = request.form.get('colli_totali_operatore', 0)
         current_state['picked_items'] = picked_qty; current_state['colli_totali_operatore'] = colli_totali
-    elif action == 'approve_order': current_state['status'] = 'Completato'
-    elif action == 'reject_order': current_state['status'] = 'In Picking'
+    elif action == 'approve_order':
+        current_state['status'] = 'Completato'
+        # --- INVIO NOTIFICA ---
+        # Invia una notifica a tutti gli utenti "admin"
+        admin_users = [user for user, data in users_db.items() if 'admin' in data['roles']]
+        for admin in admin_users:
+            print(f"Invio notifica ad admin: {admin}")
+            send_push_notification(admin, "Ordine Completato!", f"L'ordine {order_name} è pronto per la spedizione.")
+        # --- FINE INVIO NOTIFICA ---
+    elif action == 'reject_order':
+        current_state['status'] = 'In Picking'
+        
     app_data_store["statuses"][order_id] = current_state
     return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
+
+
 
 @app.route('/order/<sigla>/<serie>/<numero>/stampa_prelievo')
 @login_required
@@ -741,6 +758,9 @@ def service_worker():
     # Invia il file sw.js dalla cartella static
     return send_from_directory('static', 'sw.js', mimetype='application/javascript')
 
+with app.app_context():
+    print(f"Percorso database: {db_path}")
+    db.create_all()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)
