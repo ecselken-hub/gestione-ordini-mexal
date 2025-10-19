@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, Response, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, Response, jsonify, send_from_directory
 from mexal_api import mx_call_api, get_vettori, get_shipping_address, get_dati_aggiuntivi, get_payment_methods
 import time
 import os
