@@ -21,7 +21,25 @@ app = Flask(__name__)
 # CHIAVE SEGRETA: Fondamentale per la sicurezza delle sessioni. Cambiala con una stringa casuale!
 app.config['SECRET_KEY'] = 'dhjsbbfkjbcdvkjhrkjdjs82328933jdeshfe' 
 
-db_path = os.path.join(os.environ.get('RENDER_DISK_PATH', '/var/data'), 'notifications.db')
+render_disk_path = os.environ.get('RENDER_DISK_PATH')
+
+if render_disk_path:
+    # Siamo su Render: usa il disco persistente
+    db_path = os.path.join(render_disk_path, 'notifications.db')
+    print(f"Siamo su Render. Percorso DB: {db_path}")
+else:
+    # Siamo in locale: usa un file 'local.db' nella cartella 'instance'
+    # La 'instance_path' è una cartella sicura creata da Flask
+    instance_path = app.instance_path
+    db_path = os.path.join(instance_path, 'local.db')
+    
+    # Assicurati che la cartella 'instance' esista
+    try:
+        os.makedirs(instance_path, exist_ok=True)
+        print(f"Siamo in locale. Percorso DB: {db_path}")
+    except OSError as e:
+        print(f"Errore creando la cartella instance: {e}")
+
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 db = SQLAlchemy(app)
 
