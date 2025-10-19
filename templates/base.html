@@ -228,6 +228,20 @@
         </a>
         {% endif %}
 
+        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore')) %}
+        <a href="{{ url_for('fabbisogno') }}" class="tab-item {% if active_page == 'fabbisogno' %}active{% endif %}">
+            <div class="icon">🧾</div>
+            <div>Fabbisogno</div>
+        </a>
+        {% endif %}
+
+        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore')) %}
+        <a href="{{ url_for('magazzino') }}" class="tab-item {% if active_page == 'magazzino' %}active{% endif %}">
+            <div class="icon">🏭</div>
+            <div>Magazzino</div>
+        </a>
+        {% endif %}
+
         {% if current_user.is_authenticated and current_user.has_role('admin') %}
         <a href="{{ url_for('trasporto') }}" class="tab-item {% if active_page == 'trasporto' %}active{% endif %}">
             <div class="icon">🚚</div>

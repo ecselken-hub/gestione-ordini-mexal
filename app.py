@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, jsonify, send_from_directory
-from mexal_api import mx_call_api, get_vettori, get_shipping_address, get_dati_aggiuntivi, get_payment_methods
+from mexal_api import mx_call_api, get_vettori, get_shipping_address, get_dati_aggiuntivi, get_payment_methods, search_articles, get_article_price
 import time
 import os
 import googlemaps
@@ -576,6 +576,89 @@ def stampa_lista_prelievo(sigla, serie, numero):
         mimetype='application/pdf',
         headers={'Content-Disposition': f'attachment;filename=lista_prelievo_{order.get("numero")}.pdf'}
     )
+
+@app.route('/magazzino')
+@login_required
+def magazzino():
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return "Accesso non autorizzato", 403
+    
+    query = request.args.get('q', '')
+    articles_list = []
+    
+    if query:
+        articles_data = search_articles(query) # Cerca articoli
+        
+        for art in articles_data:
+            try:
+                # Calcola giacenza netta
+                esis = (float(art.get('qta_carico', 0)) - float(art.get('qta_scarico', 0)))
+                disp_net = (esis - float(art.get('ord_cli_e', 0)) - float(art.get('ord_cli_sps', 0)))
+                art['giacenza_netta'] = disp_net
+                
+                # --- NUOVA CHIAMATA PER IL PREZZO ---
+                # Assumiamo listino 4 = RETAIL (come da analisi script Google)
+                art['prezzo'] = get_article_price(art.get('codice'), listino_id=4)
+                # --- FINE NUOVA CHIAMATA ---
+
+            except Exception as e:
+                print(f"Errore calcolo dati per {art.get('codice')}: {e}")
+                art['giacenza_netta'] = 0
+                art['prezzo'] = 0.0 # Default a 0.0
+            
+            articles_list.append(art)
+    
+    return render_template('magazzino.html', 
+                           query=query, 
+                           articles=articles_list, 
+                           active_page='magazzino')
+
+@app.route('/fabbisogno')
+@login_required
+def fabbisogno():
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return "Accesso non autorizzato", 403
+
+    giorno_filtro = request.args.get('giorno_filtro')
+    fabbisogno_list = []
+    data_selezionata_formattata = ''
+
+    if giorno_filtro:
+        orders_list = load_all_data() or []
+        
+        giorno_da_cercare = giorno_filtro.zfill(2)
+        
+        ordini_del_giorno = [
+            order for order in orders_list 
+            if order.get('data_documento', '').endswith(giorno_da_cercare)
+        ]
+        
+        # --- LA CORREZIONE È QUI ---
+        # Aggrega le quantità degli articoli
+        fabbisogno_dict = defaultdict(lambda: {'codice': '', 'descrizione': '', 'quantita_totale': 0.0})
+        for order in ordini_del_giorno:
+            for item in order.get('righe', []):
+                codice = item.get('codice_articolo')
+                desc = item.get('descr_articolo')
+                try:
+                    qta = float(item.get('quantita', 0))
+                except (ValueError, TypeError):
+                    qta = 0.0
+                
+                if codice:
+                    fabbisogno_dict[codice]['codice'] = codice # <-- Ho aggiunto questa riga
+                    fabbisogno_dict[codice]['descrizione'] = desc
+                    fabbisogno_dict[codice]['quantita_totale'] += qta
+        
+        fabbisogno_list = sorted(fabbisogno_dict.values(), key=lambda x: x['descrizione'])
+        data_selezionata_formattata = f"Giorno: {giorno_filtro}"
+    # --- FINE CORREZIONE ---
+        
+    return render_template('fabbisogno.html',
+                           fabbisogno_list=fabbisogno_list,
+                           giorno_selezionato=giorno_filtro,
+                           data_selezionata_formattata=data_selezionata_formattata,
+                           active_page='fabbisogno')
 
 @app.route('/sw.js')
 def service_worker():

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Magazzino{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Magazzino</h1>
+</div>
+
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-body" style="padding: 1rem;">
+        <form method="GET" action="{{ url_for('magazzino') }}">
+            <div style="display: flex; gap: 1rem;">
+                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per nome articolo..." style="padding: 12px 15px;">
+                <button type="submit" class="btn btn-primary">Cerca</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="article-card-list">
+    {% if articles %}
+        {% for article in articles %}
+        <div class="card">
+            <div class="card-body">
+                <p style="font-weight: 600; font-size: 1.1rem; margin: 0 0 4px 0; color: var(--primary-text-color);">
+                    {{ article.descr_completa or article.descrizione }}
+                </p>
+                <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0 0 1rem 0;">
+                    Cod: {{ article.codice }}
+                </p>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
+                    <div style="background-color: #f5f5f7; padding: 10px; border-radius: 8px;">
+                        <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">GIACENZA NETTA</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: {% if article.giacenza_netta < 0 %}var(--danger-color){% else %}var(--primary-text-color){% endif %};">
+                            {{ "%.2f"|format(article.giacenza_netta) }}
+                        </div>
+                    </div>
+                    <div style="background-color: #f5f5f7; padding: 10px; border-radius: 8px;">
+                        <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">PREZZO RETAIL</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-color);">
+                            € {{ "%.2f"|format(article.prezzo) }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% elif query %}
+        <div class="card">
+            <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+                Nessun articolo trovato per "{{ query }}".
+            </div>
+        </div>
+    {% else %}
+         <div class="card">
+            <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+                Inizia una ricerca per visualizzare i risultati.
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

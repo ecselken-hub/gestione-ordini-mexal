@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Fabbisogno{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Fabbisogno Giornaliero</h1>
+</div>
+
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div class="card-body" style="padding: 1rem;">
+        <form method="GET" action="{{ url_for('fabbisogno') }}">
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <label for="giorno_filtro" style="font-weight: 500; color: var(--secondary-text-color);">Filtra per Giorno:</label>
+                <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px; padding: 8px 12px;">
+                <button type="submit" class="btn btn-primary" style="padding: 8px 16px;">Mostra</button>
+                <a href="{{ url_for('fabbisogno') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Pulisci</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if fabbisogno_list %}
+    <div class="card">
+        <div class="card-header">
+            Lista Articoli per il {{ data_selezionata_formattata }}
+        </div>
+        <div class="table-responsive">
+            <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                <thead>
+                    <tr>
+                        <th style="padding: 1rem; border-bottom: 1px solid var(--separator-color); font-weight: 600; color: var(--secondary-text-color);">Articolo</th>
+                        <th style="padding: 1rem; border-bottom: 1px solid var(--separator-color); font-weight: 600; color: var(--secondary-text-color); text-align: right;">Quantità Totale</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in fabbisogno_list %}
+                    <tr>
+                        <td style="padding: 1rem; border-bottom: 1px solid var(--separator-color);">
+                            <p style="font-weight: 600; margin: 0 0 4px 0;">{{ item.descrizione }}</p>
+                            <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">Cod: {{ item.codice }}</p>
+                        </td>
+                        <td style="padding: 1rem; border-bottom: 1px solid var(--separator-color); text-align: right; font-size: 1.5rem; font-weight: 700;">
+                            {% if item.quantita_totale % 1 != 0 %}
+                                {{ "%.2f"|format(item.quantita_totale) }}
+                            {% else %}
+                                {{ item.quantita_totale | int }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% elif giorno_selezionato %}
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+            Nessun ordine trovato per il giorno {{ giorno_selezionato }}.
+        </div>
+    </div>
+{% else %}
+    <div class="card">
+        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
+            Inserisci un giorno (es. 19) per calcolare il fabbisogno.
+        </div>
+    </div>
+{% endif %}
+
+{% endblock %}
