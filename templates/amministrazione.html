@@ -32,35 +32,20 @@
 
 <div class="header">
     <h1>Pannello Amministrazione</h1>
+    <a href="{{ url_for('stampa_riepilogo_admin') }}" class="btn btn-secondary" target="_blank">📄 Stampa</a>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.5rem; margin-bottom: 3rem;">
-    <div class="kpi-card">
-        <div class="kpi-label">Consegne Completate</div>
-        <div class="kpi-value">{{ summary_stats.consegne_totali }}</div>
-    </div>
-    <div class="kpi-card">
-        <div class="kpi-label">Consegne in Corso</div>
-        <div class="kpi-value accent">{{ summary_stats.consegne_in_corso }}</div>
-    </div>
-    <div class="kpi-card">
-        <div class="kpi-label">Km Totali Previsti</div>
-        <div class="kpi-value">{{ summary_stats.km_totali.split(' ')[0] }}</div>
-    </div>
-    <div class="kpi-card">
-        <div class="kpi-label">Tempo Medio Consegna</div>
-        <div class="kpi-value accent">{{ summary_stats.tempo_medio }}</div>
-    </div>
-</div>
-
-<div class="card">
-    <div class="card-header">Consegne Completate per Ora</div>
-    <div class="card-body">
-        <div class="chart-container">
-            <canvas id="consegneOraChart"></canvas>
+<div class="card" style="margin-bottom: 2rem;">
+    <div class="card-body" style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h5 style="margin: 0;">Notifiche Push</h5>
+            <p style="color: var(--secondary-text-color); margin: 4px 0 0 0; font-size: 0.9rem;">Ricevi avvisi quando gli ordini sono completati.</p>
         </div>
+        <button class="btn btn-primary" onclick="askForNotificationPermission()">Abilita Notifiche</button>
     </div>
 </div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1.5rem; margin-bottom: 3rem;">
+    </div>
 
 {% if dettagli_per_autista %}
     {% for autista, data in dettagli_per_autista.items() %}
@@ -68,71 +53,10 @@
             <h2 class="driver-header">🚚 {{ autista }}</h2>
             
             <div class="driver-summary card">
-                 <div class="summary-item">
-                    <div class="summary-label">CONSEGNE</div>
-                    <div class="summary-value">{{ data.summary.num_consegne }}</div>
                 </div>
-                <div class="summary-item">
-                    <div class="summary-label">KM PREVISTI</div>
-                    <div class="summary-value">{{ data.summary.km_previsti }}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">TEMPO PREVISTO</div>
-                    <div class="summary-value">{{ data.summary.tempo_previsto }}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">TEMPO IMPIEGATO</div>
-                    <div class="summary-value" style="color: var(--accent-color);">{{ data.summary.tempo_totale_reale }}</div>
-                </div>
-            </div>
 
-            <div class="card">
-                <div class="card-header">Dettaglio Consegne</div>
-                <div class="table-responsive">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Stato</th>
-                                <th>Destinazione</th>
-                                <th>Cliente</th>
-                                <th>Colli</th>
-                                <th>Orari Reali</th>
-                                <th>Durata</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for tappa in data.consegne %}
-                                <tr>
-                                    <td>
-                                        {% if tappa.status == 'Completata' %}
-                                            <span class="badge bg-success">Completata</span>
-                                        {% elif tappa.status == 'In Corso' %}
-                                            <span class="badge bg-primary">In Corso</span>
-                                        {% else %}
-                                             <span class="badge bg-secondary">{{ tappa.status }}</span>
-                                        {% endif %}
-                                    </td>
-                                    <td>
-                                        <strong>{{ tappa.indirizzo }}</strong><br>
-                                        <span class="text-muted">{{ tappa.localita }}</span>
-                                    </td>
-                                    <td>{{ tappa.ragione_sociale }}</td>
-                                    <td style="font-weight: 700; text-align: center;">{{ tappa.colli }}</td>
-                                    <td>
-                                        {% if tappa.start_time_reale != '-' %}
-                                            <span class="badge bg-primary">{{ tappa.start_time_reale }}</span>
-                                        {% endif %}
-                                        {% if tappa.end_time_reale != '-' %}
-                                             → <span class="badge bg-success">{{ tappa.end_time_reale }}</span>
-                                        {% endif %}
-                                    </td>
-                                    <td style="font-weight: 600;">{{ tappa.durata_effettiva }}</td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+            <div class="card" style="margin-top: 1rem;">
                 </div>
-            </div>
         </section>
     {% endfor %}
 {% else %}
