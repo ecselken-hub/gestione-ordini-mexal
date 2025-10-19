@@ -13,10 +13,20 @@ from wtforms.validators import DataRequired
 from werkzeug.security import generate_password_hash, check_password_hash # Per le password
 from fpdf import FPDF # Importa la libreria PDF
 import io # Necessario per inviare il PDF
+import json # Per le notifiche
+from flask_sqlalchemy import SQLAlchemy
+from pywebpush import webpush, WebPushException
 
 app = Flask(__name__)
 # CHIAVE SEGRETA: Fondamentale per la sicurezza delle sessioni. Cambiala con una stringa casuale!
 app.config['SECRET_KEY'] = 'dhjsbbfkjbcdvkjhrkjdjs82328933jdeshfe' 
+
+db_path = os.path.join(os.environ.get('RENDER_DISK_PATH', '/var/data'), 'notifications.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+db = SQLAlchemy(app)
+
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
+VAPID_CLAIM_EMAIL = "mailto:ecsel.ken@gmail.com"
 
 # --- Configurazione Flask-Login ---
 login_manager = LoginManager()
@@ -102,6 +112,72 @@ def logout():
     logout_user() # Cancella la sessione utente
     flash('Logout effettuato con successo.', 'success')
     return redirect(url_for('login')) # Reindirizza alla pagina di login
+
+class PushSubscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    # L'utente a cui appartiene questa sottoscrizione (l'admin)
+    user_id = db.Column(db.String(50), nullable=False) 
+    # Il JSON completo della sottoscrizione inviato dal browser
+    subscription_json = db.Column(db.Text, nullable=False)
+
+# --- ROTTE PER LE NOTIFICHE ---
+@app.route('/vapid-public-key')
+@login_required
+def get_vapid_public_key():
+    """Invia la chiave VAPID pubblica al client."""
+    return jsonify({'public_key': os.getenv('VAPID_PUBLIC_KEY')})
+
+@app.route('/save-subscription', methods=['POST'])
+@login_required
+def save_subscription():
+    """Salva la sottoscrizione push di un utente nel database."""
+    subscription_data = request.json
+    user_id = current_user.id
+    
+    # Controlla se la sottoscrizione esiste già per questo utente
+    existing_sub = PushSubscription.query.filter_by(
+        user_id=user_id, 
+        subscription_json=json.dumps(subscription_data)
+    ).first()
+    
+    if not existing_sub:
+        new_sub = PushSubscription(
+            user_id=user_id,
+            subscription_json=json.dumps(subscription_data)
+        )
+        db.session.add(new_sub)
+        db.session.commit()
+        print(f"Nuova sottoscrizione salvata per l'utente {user_id}")
+    else:
+        print(f"Sottoscrizione già esistente per l'utente {user_id}")
+        
+    return jsonify({'success': True})
+
+def send_push_notification(user_id, title, body):
+    """Invia una notifica a tutte le sottoscrizioni di un utente."""
+    subscriptions = PushSubscription.query.filter_by(user_id=user_id).all()
+    if not subscriptions:
+        print(f"Nessuna sottoscrizione trovata per l'utente {user_id}")
+        return
+
+    payload = json.dumps({"title": title, "body": body})
+    
+    for sub in subscriptions:
+        try:
+            subscription_info = json.loads(sub.subscription_json)
+            webpush(
+                subscription_info=subscription_info,
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": VAPID_CLAIM_EMAIL}
+            )
+        except WebPushException as ex:
+            print(f"Errore invio notifica: {ex}")
+            # Se la sottoscrizione è scaduta o non valida, la rimuoviamo
+            if ex.response and ex.response.status_code in [404, 410]:
+                db.session.delete(sub)
+                db.session.commit()
+                print(f"Sottoscrizione rimossa: {ex.response.status_code}")
 
 # --- Store e Funzioni Dati (invariate) ---
 app_data_store = {

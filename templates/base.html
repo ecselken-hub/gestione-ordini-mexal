@@ -228,14 +228,16 @@
         </a>
         {% endif %}
 
-        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore')) %}
+        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore'))
+        %}
         <a href="{{ url_for('fabbisogno') }}" class="tab-item {% if active_page == 'fabbisogno' %}active{% endif %}">
             <div class="icon">🧾</div>
             <div>Fabbisogno</div>
         </a>
         {% endif %}
 
-        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore')) %}
+        {% if current_user.is_authenticated and (current_user.has_role('admin') or current_user.has_role('preparatore'))
+        %}
         <a href="{{ url_for('magazzino') }}" class="tab-item {% if active_page == 'magazzino' %}active{% endif %}">
             <div class="icon">🏭</div>
             <div>Magazzino</div>
@@ -281,6 +283,62 @@
                     console.error('Errore durante la registrazione del Service Worker:', error);
                 });
         }
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        // Chiede il permesso per le notifiche
+        async function askForNotificationPermission() {
+            try {
+                // Chiedi solo se l'utente è un admin
+                {% if current_user.is_authenticated and current_user.has_role('admin') %}
+
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    console.log('Permesso notifiche non concesso.');
+                    return;
+                }
+                console.log('Permesso notifiche concesso.');
+
+                const reg = await navigator.serviceWorker.ready;
+
+                // Recupera la chiave VAPID pubblica dal server
+                const vapidResponse = await fetch("{{ url_for('get_vapid_public_key') }}");
+                const vapidData = await vapidResponse.json();
+                const vapidPublicKey = vapidData.public_key;
+
+                // Sottoscrive l'utente
+                const subscription = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+                });
+
+                console.log('Sottoscrizione ottenuta:', JSON.stringify(subscription));
+
+                // Invia la sottoscrizione al server per salvarla
+                await fetch("{{ url_for('save_subscription') }}", {
+                    method: 'POST',
+                    body: JSON.stringify(subscription),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                console.log('Sottoscrizione salvata sul server.');
+
+                {% endif %}
+            } catch (err) {
+                console.error('Errore durante la sottoscrizione push:', err);
+            }
+        }
+
+        // Avvia il processo di richiesta permesso (es. dopo 10 secondi dal caricamento)
+        setTimeout(askForNotificationPermission, 10000);
     </script>
 </body>
 
