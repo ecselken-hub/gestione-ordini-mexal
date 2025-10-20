@@ -284,7 +284,7 @@
                 });
         }
 
-function urlBase64ToUint8Array(base64String) {
+        function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
             const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
             const rawData = window.atob(base64);
@@ -307,7 +307,7 @@ function urlBase64ToUint8Array(base64String) {
                 console.log('Permesso notifiche concesso.');
 
                 const reg = await navigator.serviceWorker.ready;
-                
+
                 const vapidResponse = await fetch("{{ url_for('get_vapid_public_key') }}");
                 const vapidData = await vapidResponse.json();
                 const vapidPublicKey = vapidData.public_key;
@@ -316,14 +316,14 @@ function urlBase64ToUint8Array(base64String) {
                     userVisibleOnly: true,
                     applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
                 });
-                
+
                 // Invia la sottoscrizione al server per salvarla
                 await fetch("{{ url_for('save_subscription') }}", {
                     method: 'POST',
                     body: JSON.stringify(subscription),
                     headers: { 'Content-Type': 'application/json' }
                 });
-                
+
                 console.log('Sottoscrizione salvata sul server.');
                 alert('Notifiche abilitate con successo!'); // Feedback per l'utente
 
@@ -333,6 +333,30 @@ function urlBase64ToUint8Array(base64String) {
             }
         }
     </script>
+
+    {% if enable_polling %}
+    <script>
+        function checkUpdates() {
+            console.log('Polling: Controllo aggiornamenti...');
+            fetch("{{ url_for('check_updates') }}")
+                .then(response => response.json())
+                .then(data => {
+                    if (data.new_data === true) {
+                        console.log('Polling: Nuovi dati trovati! Ricaricamento...');
+                        // Mostra un avviso e ricarica la pagina
+                        document.getElementById('update-banner').style.display = 'block';
+                        setTimeout(() => {
+                            location.reload();
+                        }, 1000); // Attende 1 secondo prima di ricaricare
+                    }
+                })
+                .catch(error => console.error('Polling: Errore durante il controllo:', error));
+        }
+
+        // Avvia il controllo ogni 60 secondi
+        setInterval(checkUpdates, 60000);
+    </script>
+    {% endif %}
 </body>
 
 </html>

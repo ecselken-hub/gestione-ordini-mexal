@@ -277,7 +277,7 @@ def ordini_list():
         data = order['data_formattata']
         if data not in ordini_per_data: ordini_per_data[data] = []
         ordini_per_data[data].append(order)
-    return render_template('orders.html', ordini_per_data=ordini_per_data, giorno_selezionato=giorno_filtro, active_page='ordini')
+    return render_template('orders.html', ordini_per_data=ordini_per_data, giorno_selezionato=giorno_filtro, active_page='ordini', enable_polling=True)
 
 @app.route('/trasporto')
 @login_required
@@ -301,8 +301,49 @@ def trasporto():
         else: data_formattata = "Data Sconosciuta"
         if data_formattata not in ordini_per_data: ordini_per_data[data_formattata] = []
         ordini_per_data[data_formattata].append(order)
-    return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto')
+    return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto', enable_polling=True)
     
+# --- NUOVA ROTTA PER IL POLLING ---
+@app.route('/check-updates')
+@login_required
+def check_updates():
+    """
+    Controlla se ci sono nuovi ordini o modifiche su Mexal
+    dall'ultimo caricamento dati.
+    """
+    last_load = app_data_store.get("last_load_time")
+    if not last_load:
+        # Dati mai caricati, forza aggiornamento
+        app_data_store["orders"] = {} # Svuota cache
+        return jsonify({'new_data': True})
+
+    # Formatta l'ora per la chiamata API (es: '20251020 143000')
+    last_load_str = last_load.strftime('%Y%m%d %H%M%S')
+    
+    # Cerca documenti modificati dopo l'ultimo caricamento
+    # 'data_ult_mod' è un campo standard menzionato nella documentazione
+    search_data = {
+        'Filtri': [
+            {'Campo': 'data_ult_mod', 'Operatore': '>', 'Valore': last_load_str}
+        ]
+    }
+    
+    # Controlliamo sia le testate che le righe per le modifiche
+    updates_testate = mx_call_api('risorse/documenti/ordini-clienti/ricerca', method='POST', data=search_data)
+    updates_righe = mx_call_api('risorse/documenti/ordini-clienti/righe/ricerca', method='POST', data=search_data)
+    
+    if (updates_testate and updates_testate.get('dati')) or (updates_righe and updates_righe.get('dati')):
+        print("Rilevati aggiornamenti da Mexal. Svuoto la cache.")
+        # Se ci sono aggiornamenti, svuota la cache per forzare un ricaricamento completo
+        app_data_store["orders"] = {} 
+        app_data_store["last_load_time"] = None
+        return jsonify({'new_data': True})
+    
+    # Nessuna novità
+    print("Nessun aggiornamento da Mexal.")
+    return jsonify({'new_data': False})
+
+
 @app.route('/assign_all_vettori', methods=['POST'])
 @login_required
 def assign_all_vettori():
