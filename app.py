@@ -138,6 +138,10 @@ class PushSubscription(db.Model):
     # Il JSON completo della sottoscrizione inviato dal browser
     subscription_json = db.Column(db.Text, nullable=False)
 
+@app.route('/sw.js')
+def service_worker():
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
 # --- ROTTE PER LE NOTIFICHE ---
 @app.route('/vapid-public-key')
 @login_required
@@ -814,11 +818,6 @@ def fabbisogno():
                            giorno_selezionato=giorno_filtro,
                            data_selezionata_formattata=data_selezionata_formattata,
                            active_page='fabbisogno')
-
-@app.route('/sw.js')
-def service_worker():
-    # Invia il file sw.js dalla cartella static
-    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
 
 with app.app_context():
     print(f"Percorso database: {db_path}")

@@ -211,6 +211,7 @@
             outline: none;
             box-shadow: none;
         }
+
         .update-banner {
             position: fixed;
             top: 0;
@@ -222,7 +223,8 @@
             padding: 10px;
             font-weight: 500;
             z-index: 2000;
-            display: none; /* Nascosto di default */
+            display: none;
+            /* Nascosto di default */
         }
     </style>
 </head>
@@ -291,17 +293,23 @@
         {% endif %}
     </nav>
     <script>
+        // Registra il Service Worker
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}")
-                .then((registration) => {
-                    console.log('Service Worker registrato con successo:', registration);
+            // Usa l'URL corretto per il service worker
+            navigator.serviceWorker.register("{{ url_for('service_worker') }}")
+                .then(reg => {
+                    console.log('Service Worker registrato con successo.');
                 })
-                .catch((error) => {
-                    console.error('Errore durante la registrazione del Service Worker:', error);
+                .catch(err => {
+                    console.error('Errore registrazione Service Worker:', err);
+                    // Mostra un alert se la registrazione fallisce
+                    alert('ERRORE: Impossibile registrare il Service Worker. Le notifiche non funzioneranno. Dettagli: ' + err.message);
                 });
+        } else {
+            alert('Service Worker non è supportato in questo browser.');
         }
 
-// Funzione per convertire la chiave VAPID
+        // Funzione per convertire la chiave VAPID
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
             const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
@@ -313,13 +321,12 @@
             return outputArray;
         }
 
-        // Funzione per chiedere il permesso (CON ALERT DI DEBUG)
         async function askForNotificationPermission() {
             try {
                 // 1. Chiedi il permesso
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
-                    alert('Permesso negato. Controlla le impostazioni del browser/app.');
+                    alert('Permesso negato. Controlla le impostazioni di Safari (Notifiche > [Tua App]).');
                     return;
                 }
                 alert('Passo 1/5: Permesso concesso.');
@@ -353,14 +360,14 @@
                 });
 
                 if (!saveResponse.ok) {
-                     alert('Errore: Il server ha rifiutato il salvataggio della sottoscrizione.');
-                     return;
+                    alert('Errore: Il server ha rifiutato il salvataggio della sottoscrizione.');
+                    return;
                 }
                 alert('Passo 5/5: Sottoscrizione salvata sul server. Notifiche abilitate!');
 
             } catch (err) {
                 console.error('Errore durante la sottoscrizione push:', err);
-                alert('ERRORE CRITICO: ' + err.message); // Messaggio di errore critico
+                alert('ERRORE CRITICO: ' + err.message);
             }
         }
     </script>
