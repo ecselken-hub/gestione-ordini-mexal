@@ -211,10 +211,27 @@
             outline: none;
             box-shadow: none;
         }
+        .update-banner {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background-color: var(--accent-color);
+            color: white;
+            text-align: center;
+            padding: 10px;
+            font-weight: 500;
+            z-index: 2000;
+            display: none; /* Nascosto di default */
+        }
     </style>
 </head>
 
 <body>
+    <div id="update-banner" class="update-banner">
+        Nuovi ordini trovati. Aggiornamento in corso...
+    </div>
+
     <main class="container">
         {% block content %}{% endblock %}
     </main>
@@ -354,7 +371,7 @@
         }
 
         // Avvia il controllo ogni 60 secondi
-        setInterval(checkUpdates, 60000);
+        setInterval(checkUpdates, 30000);
     </script>
     {% endif %}
 </body>

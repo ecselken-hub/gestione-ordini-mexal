@@ -204,7 +204,8 @@ app_data_store = {
     "logistics": {}, 
     "delivery_events": {}, 
     "calculated_routes": {},
-    "driver_notes": {}
+    "driver_notes": {},
+    "last_load_time": None
 }
 def get_initial_status(): return {'status': 'Da Lavorare', 'picked_items': {}, 'colli_totali_operatore': 0}
 
@@ -244,7 +245,9 @@ def load_all_data():
         order['pagamento_desc'] = payment_map.get(order.get('id_pagamento'), 'N/D')
         order['righe'] = rows_map.get(order_key, [])
         app_data_store["orders"][order_key] = order
-    return orders
+    # Salva l'ora di questo caricamento
+    app_data_store["last_load_time"] = datetime.now()
+    return list(app_data_store["orders"].values())
 
 @app.route('/')
 @login_required
