@@ -301,6 +301,7 @@
                 });
         }
 
+// Funzione per convertire la chiave VAPID
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
             const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
@@ -312,41 +313,54 @@
             return outputArray;
         }
 
-        // Funzione per chiedere il permesso (ora chiamata da un pulsante)
+        // Funzione per chiedere il permesso (CON ALERT DI DEBUG)
         async function askForNotificationPermission() {
             try {
+                // 1. Chiedi il permesso
                 const permission = await Notification.requestPermission();
                 if (permission !== 'granted') {
-                    console.log('Permesso notifiche non concesso.');
-                    alert('Permesso per le notifiche non concesso.'); // Feedback per l'utente
+                    alert('Permesso negato. Controlla le impostazioni del browser/app.');
                     return;
                 }
-                console.log('Permesso notifiche concesso.');
+                alert('Passo 1/5: Permesso concesso.');
 
+                // 2. Prepara il Service Worker
                 const reg = await navigator.serviceWorker.ready;
+                alert('Passo 2/5: Service Worker pronto.');
 
+                // 3. Recupera la chiave VAPID pubblica
                 const vapidResponse = await fetch("{{ url_for('get_vapid_public_key') }}");
                 const vapidData = await vapidResponse.json();
                 const vapidPublicKey = vapidData.public_key;
+                if (!vapidPublicKey) {
+                    alert('Errore: Chiave VAPID pubblica non ricevuta dal server.');
+                    return;
+                }
+                alert('Passo 3/5: Chiave VAPID pubblica ricevuta.');
 
+                // 4. Sottoscrivi l'utente al servizio push
                 const subscription = await reg.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
                 });
+                alert('Passo 4/5: Sottoscrizione al servizio Push riuscita.');
 
-                // Invia la sottoscrizione al server per salvarla
-                await fetch("{{ url_for('save_subscription') }}", {
+                // 5. Invia la sottoscrizione al server per salvarla
+                const saveResponse = await fetch("{{ url_for('save_subscription') }}", {
                     method: 'POST',
                     body: JSON.stringify(subscription),
                     headers: { 'Content-Type': 'application/json' }
                 });
 
-                console.log('Sottoscrizione salvata sul server.');
-                alert('Notifiche abilitate con successo!'); // Feedback per l'utente
+                if (!saveResponse.ok) {
+                     alert('Errore: Il server ha rifiutato il salvataggio della sottoscrizione.');
+                     return;
+                }
+                alert('Passo 5/5: Sottoscrizione salvata sul server. Notifiche abilitate!');
 
             } catch (err) {
                 console.error('Errore durante la sottoscrizione push:', err);
-                alert('Errore durante l\'abilitazione delle notifiche.'); // Feedback per l'utente
+                alert('ERRORE CRITICO: ' + err.message); // Messaggio di errore critico
             }
         }
     </script>
