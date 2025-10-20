@@ -506,11 +506,38 @@ def start_consegna():
 @app.route('/consegna/end', methods=['POST'])
 @login_required
 def end_consegna():
-    # ... (logica invariata)
-    if not (current_user.has_role('admin') or current_user.has_role('autista')): return "Accesso non autorizzato", 403
+    if not (current_user.has_role('admin') or current_user.has_role('autista')):
+        return "Accesso non autorizzato", 403
+    
     order_key = request.form.get('order_key')
     autista_nome = request.form.get('autista_nome')
-    if order_key: app_data_store["delivery_events"].setdefault(order_key, {})['end_time'] = datetime.now().strftime('%H:%M:%S')
+    
+    if order_key:
+        # 1. Salva l'evento di fine consegna
+        app_data_store["delivery_events"].setdefault(order_key, {})['end_time'] = datetime.now().strftime('%H:%M:%S')
+
+        # --- NUOVA LOGICA DI NOTIFICA ---
+        try:
+            # 2. Recupera i dettagli dell'ordine per la notifica
+            ordine = app_data_store.get("orders", {}).get(order_key)
+            if ordine:
+                nome_cliente = ordine.get('ragione_sociale', 'Cliente Sconosciuto')
+                
+                # 3. Definisci il messaggio
+                titolo_notifica = f"Consegna Completata (Autista: {autista_nome})"
+                corpo_notifica = f"Consegna a {nome_cliente} è stata completata."
+                
+                # 4. Trova e invia la notifica a tutti gli admin
+                admin_users = [user for user, data in users_db.items() if 'admin' in data['roles']]
+                for admin in admin_users:
+                    print(f"Invio notifica di consegna completata ad admin: {admin}")
+                    send_push_notification(admin, titolo_notifica, corpo_notifica)
+            else:
+                print(f"Errore notifica: Dettagli ordine non trovati per {order_key}")
+        except Exception as e:
+            print(f"Errore durante l'invio della notifica di consegna: {e}")
+        # --- FINE NUOVA LOGICA ---
+
     return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
 def _calculate_admin_summary_data():
