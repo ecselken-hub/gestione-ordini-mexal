@@ -1,5 +1,3 @@
-# app.py (Versione Corretta con Lock, Error Handling e Senza Stampa PDF)
-
 from flask import Flask, render_template, request, redirect, url_for, flash, Response, jsonify, send_from_directory
 from mexal_api import ( # Importa funzioni specifiche
     mx_call_api, get_vettori, get_shipping_address, get_dati_aggiuntivi,
@@ -19,12 +17,10 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField
 from wtforms.validators import DataRequired
 from werkzeug.security import generate_password_hash, check_password_hash
-# from fpdf import FPDF # --- RIMOZIONE PDF --- Rimosso import
-# import io # --- RIMOZIONE PDF --- Rimosso import
 import json
 from flask_sqlalchemy import SQLAlchemy
 from pywebpush import webpush, WebPushException
-import threading # --- CORREZIONE 1: Importa threading per il Lock ---
+import threading 
 
 # Carica variabili d'ambiente da .env (se esiste)
 load_dotenv()
@@ -74,7 +70,8 @@ users_db = {
     "autista": {"password_hash": "pbkdf2:sha256:1000000$y7INoNA89V5aXVqX$21863e95fd82ea2b73defb775f4b987e7a9b66ea4e536185b1504813a83", "roles": ["autista"]}, # Esempio: password 'driverpass'
     "boxer": {"password_hash": "pbkdf2:sha256:1000000$x6OFUZcMP7Qp77f4$1b0a9c69a97acaecab99359ac4566f0c2dcd3eeb1d115d870fb2975f3810272", "roles": ["autista"], "nome_autista": "BOXER"}, # Esempio: password 'boxerpass'
     "expert": {"password_hash": "pbkdf2:sha256:1000000$kheELNvGyCnYdLL8$ec03d3ba28ef3db220844a5da0d3b71b48b5b2b9c312125e07c90d7fc5470451", "roles": ["autista"], "nome_autista": "EXPERT"}, # Esempio: password 'expertpass'
-    "preparatore": {"password_hash": "pbkdf2:sha256:1000000$aMf8iIqOtKzKxwWu$223306f4b9f72d534fe1928eaaec69c0bae6ca2c19836cdb54a8e115e7565ddf", "roles": ["preparatore"]} # Esempio: password 'pickerpass'
+    "preparatore": {"password_hash": "pbkdf2:sha256:1000000$aMf8iIqOtKzKxwWu$223306f4b9f72d534fe1928eaaec69c0bae6ca2c19836cdb54a8e115e7565ddf", "roles": ["preparatore"]}, # Esempio: password 'pickerpass'
+    "antonio": {"password_hash": "pbkdf2:sha256:1000000$cnsUw4MBXg3htnhw$66d5ea591c79f0985ddc17c62bbb4b27ecd1a63a72ab5ed4f9b6d996bf46be3a", "roles": ["admin"]} # Esempio hash per 'antoniopass'
 }
 
 class User(UserMixin):
@@ -105,7 +102,7 @@ class LoginForm(FlaskForm):
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('dashboard'))
+        return redirect(url_for('todo_list'))
     form = LoginForm()
     if form.validate_on_submit():
         user_data = users_db.get(form.username.data)
@@ -118,7 +115,7 @@ def login():
             if next_page and next_page.startswith('/'):
                  return redirect(next_page)
             else:
-                 return redirect(url_for('dashboard'))
+                 return redirect(url_for('todo_list'))
         else:
             flash('Username o password non validi.', 'danger')
     return render_template('login.html', form=form)
@@ -129,6 +126,18 @@ def logout():
     logout_user()
     flash('Logout effettuato con successo.', 'success')
     return redirect(url_for('login'))
+
+class TodoItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(80), nullable=False, index=True) # Username dell'utente
+    description = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    is_completed = db.Column(db.Boolean, default=False, nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True) # Ora completamento
+
+    def __repr__(self):
+        status = "Completato" if self.is_completed else "Da fare"
+        return f'<Todo {self.id} [{status}] - User: {self.user_id}>'
 
 # --- Modello DB PushSubscription (OK) ---
 class PushSubscription(db.Model):
@@ -432,30 +441,6 @@ def load_all_data():
 
 
 # --- Rotte Principali (con Lock e Error Handling) ---
-
-@app.route('/')
-@login_required
-def dashboard():
-    """Reindirizza l'utente alla pagina appropriata in base al ruolo."""
-    if current_user.has_role('admin'):
-        return redirect(url_for('ordini_list'))
-    elif current_user.has_role('preparatore'):
-        return redirect(url_for('ordini_list'))
-    elif current_user.has_role('autista'):
-        # Se l'autista ha un nome specifico associato, va alla sua pagina consegne
-        if current_user.nome_autista:
-            return redirect(url_for('consegne_autista', autista_nome=current_user.nome_autista))
-        else:
-            # Altrimenti potrebbe andare a una pagina generica per autisti o dashboard
-            flash("Profilo autista non completamente configurato (nome mancante).", "warning")
-            return redirect(url_for('autisti')) # Pagina elenco autisti/giri
-    else:
-        # Ruolo non gestito o mancante
-        flash("Ruolo utente non definito o non autorizzato.", "danger")
-        logout_user() # Effettua il logout per sicurezza
-        return redirect(url_for('login'))
-
-
 @app.route('/ordini')
 @login_required
 def ordini_list():
@@ -1813,6 +1798,121 @@ def clienti_indirizzi():
                            clients=clients,                 # Lista dei clienti ordinata
                            addresses_map=addresses_by_client, # Dizionario con indirizzi per cliente
                            active_page='clienti_indirizzi')
+
+@app.route('/todo')
+@login_required # Accessibile a tutti gli utenti loggati
+def todo_list():
+    """Visualizza la lista To-Do dell'utente corrente."""
+    user_id = current_user.id
+    try:
+        # Recupera task non completati e completati separatamente, ordinati
+        incomplete_tasks = TodoItem.query.filter_by(user_id=user_id, is_completed=False).order_by(TodoItem.created_at.desc()).all()
+        completed_tasks = TodoItem.query.filter_by(user_id=user_id, is_completed=True).order_by(TodoItem.completed_at.desc()).all()
+    except Exception as e:
+        print(f"Errore DB leggendo ToDo per {user_id}: {e}")
+        flash("Errore nel caricamento delle cose da fare.", "danger")
+        incomplete_tasks = []
+        completed_tasks = []
+
+    return render_template('todo.html',
+                           incomplete_tasks=incomplete_tasks,
+                           completed_tasks=completed_tasks,
+                           active_page='todo') # Per evidenziare tab attiva
+
+@app.route('/todo/add', methods=['POST'])
+@login_required
+def add_todo():
+    """Aggiunge una nuova task e invia una notifica push."""
+    description = request.form.get('description', '').strip()
+    user_id = current_user.id
+
+    if not description:
+        flash("La descrizione non può essere vuota.", "warning")
+    else:
+        try:
+            # Crea e salva la nuova task
+            new_task = TodoItem(user_id=user_id, description=description)
+            db.session.add(new_task)
+            db.session.commit()
+            flash("Nuova cosa da fare aggiunta!", "success")
+
+            # --- AGGIUNTA: Invia notifica push ---
+            try:
+                # Prepara titolo e corpo (puoi personalizzarli)
+                # Limita la lunghezza della descrizione nella notifica
+                description_short = (description[:40] + '...') if len(description) > 40 else description
+                notification_title = "Nuova Cosa da Fare!"
+                notification_body = f"Hai aggiunto: '{description_short}'"
+
+                print(f"Tentativo invio notifica ToDo a {user_id}")
+                # Chiama la funzione per inviare la notifica all'utente corrente
+                send_push_notification(user_id, notification_title, notification_body)
+            except Exception as notify_err:
+                # Logga l'errore ma non bloccare l'utente
+                print(f"ERRORE [add_todo]: Fallito invio notifica push per {user_id}: {notify_err}")
+                # Potresti aggiungere un flash warning qui se vuoi informare l'utente
+                # flash("Cosa da fare aggiunta, ma errore invio notifica.", "warning")
+            # --- FINE AGGIUNTA ---
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"Errore DB aggiungendo ToDo per {user_id}: {e}")
+            flash("Errore durante l'aggiunta della cosa da fare.", "danger")
+
+    return redirect(url_for('todo_list'))
+
+@app.route('/todo/toggle/<int:item_id>', methods=['POST'])
+@login_required
+def toggle_todo(item_id):
+    """Marca una task come completata o la riapre."""
+    user_id = current_user.id
+    try:
+        # Cerca la task specifica dell'utente
+        task = TodoItem.query.filter_by(id=item_id, user_id=user_id).first()
+        if task:
+            if task.is_completed:
+                # Ri-apri task
+                task.is_completed = False
+                task.completed_at = None # Rimuovi timestamp completamento
+                flash(f"'{task.description[:30]}...' riaperta.", "info")
+            else:
+                # Completa task
+                task.is_completed = True
+                task.completed_at = datetime.utcnow() # Imposta timestamp completamento
+                flash(f"'{task.description[:30]}...' completata!", "success")
+            db.session.commit() # Salva modifiche
+        else:
+            # Task non trovata o non appartiene all'utente
+            flash("Operazione non trovata o non autorizzata.", "warning")
+    except Exception as e:
+        db.session.rollback()
+        print(f"Errore DB toggling ToDo {item_id} per {user_id}: {e}")
+        flash("Errore durante l'aggiornamento dello stato.", "danger")
+
+    return redirect(url_for('todo_list')) # Torna alla lista
+
+@app.route('/todo/delete/<int:item_id>', methods=['POST'])
+@login_required
+def delete_todo(item_id):
+    """Elimina una task."""
+    user_id = current_user.id
+    try:
+        # Cerca la task specifica dell'utente
+        task = TodoItem.query.filter_by(id=item_id, user_id=user_id).first()
+        if task:
+            description_short = task.description[:30] # Salva descrizione per messaggio
+            db.session.delete(task) # Elimina dal DB
+            db.session.commit() # Salva modifiche
+            flash(f"'{description_short}...' eliminata.", "success")
+        else:
+            flash("Operazione non trovata o non autorizzata.", "warning")
+    except Exception as e:
+        db.session.rollback()
+        print(f"Errore DB eliminando ToDo {item_id} per {user_id}: {e}")
+        flash("Errore durante l'eliminazione.", "danger")
+
+    return redirect(url_for('todo_list')) # Torna alla lista
+
 # --- NUOVA POSIZIONE: Creazione DB all'avvio, prima di app.run ---
 with app.app_context():
     try:
