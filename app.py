@@ -29,7 +29,7 @@ app = Flask(__name__)
 
 # --- CORREZIONE 7: Raccomandazione per SECRET_KEY ---
 # NOTA: Per produzione, sposta SECRET_KEY in una variabile d'ambiente!
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default-insecure-secret-key-change-me') # Usa env var se presente, altrimenti default
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'uqwyeuiqyieqwwquye') # Usa env var se presente, altrimenti default
 
 # Configurazione Database SQLAlchemy (OK)
 render_disk_path = os.environ.get('RENDER_DISK_PATH')
@@ -51,7 +51,7 @@ db = SQLAlchemy(app)
 # Configurazione Notifiche Push (OK, ma assicurati che le chiavi env siano impostate)
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
-VAPID_CLAIM_EMAIL = os.getenv("VAPID_CLAIM_EMAIL", "mailto:default@example.com") # Default se non impostato
+VAPID_CLAIM_EMAIL = os.getenv("VAPID_CLAIM_EMAIL", "mailto:ecsel.ken@gmail.com") # Default se non impostato
 
 # Configurazione Flask-Login (OK)
 login_manager = LoginManager()
