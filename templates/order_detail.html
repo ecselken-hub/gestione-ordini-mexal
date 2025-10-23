@@ -15,7 +15,7 @@
 <div class="card mb-3">
     <div class="card-header">Dati Cliente</div>
     <div class="card-body">
-        <p><strong>Indirizzo di Spedizione:</strong> {{ order.indirizzo }}, {{ order.localita }}</p>
+        <p><strong>Località:</strong> {{ order.localita_effettiva }}</p>
         {% if order.telefono %}<p><strong>Telefono:</strong> {{ order.telefono }}</p>{% endif %}
         {% if order.nota %}<p><strong>Note Ordine:</strong> {{ order.nota }}</p>{% endif %}
         {% if order.pagamento_desc %}<p><strong>Pagamento:</strong> {{ order.pagamento_desc }}</p>{% endif %}
@@ -58,10 +58,23 @@
             {% if order.righe %}
                 {% for item in order.righe %}
                     {% set row_id = item.id_riga | string %}
-                    {% set qta_ordinata = (item.quantita | string | replace(',', '.') | float) if item.quantita is defined else 0.0 %}
+                    {# --- MODIFICA: Calcola qta_ordinata in base a nr_colli --- #}
+                    {# Prova a convertire nr_colli in numero #}
+                    {% set nr_colli_val = (item.nr_colli | string | replace(',', '.') | float) if item.nr_colli is defined and item.nr_colli is not none and item.nr_colli != '' else 0.0 %}
+                    {# Prova a convertire quantita in numero #}
+                    {% set quantita_val = (item.quantita | string | replace(',', '.') | float) if item.quantita is defined and item.quantita is not none and item.quantita != '' else 0.0 %}
+
+                    {# Se nr_colli è valido e > 0, usa quello come qta_ordinata #}
+                    {% if nr_colli_val > 0 %}
+                        {% set qta_ordinata = nr_colli_val %}
+                    {# Altrimenti, usa quantita_val #}
+                    {% else %}
+                        {% set qta_ordinata = quantita_val %}
+                    {% endif %}
+                    {# --- FINE MODIFICA --- #}
                     {% set qta_prelevata = (state.picked_items.get(row_id, '0') | string | replace(',', '.') | float) if state.picked_items else 0.0 %}
                     {% set is_complete = (qta_prelevata >= qta_ordinata and qta_ordinata > 0) %}
-
+                    
                 {# Struttura DIV simile all'immagine 'prima' #}
                 <div class="article-row {% if is_complete %}picked-complete-simple{% endif %}" id="order-row-{{ row_id }}">
                     <div class="article-info">
@@ -127,7 +140,7 @@
 .header h1 { font-size: 1.8rem; }
 
 /* Card semplici */
-.card { border: 1px solid #e0e0e0; border-radius: 0.25rem; margin-bottom: 1rem; background-color: #fff; }
+.card { border: 1px solid #e0e0e0; border-radius: 0.75rem; margin-bottom: 1rem; background-color: #fff; }
 .card-header { background-color: #f8f9fa; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e0e0e0;}
 .card-body { padding: 1rem; }
 

@@ -12,7 +12,7 @@
     <div class="card-body" style="padding: 1rem;">
         <form method="GET" action="{{ url_for('magazzino') }}">
             <div style="display: flex; gap: 1rem;">
-                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per codice o descrizione..." style="padding: 12px 15px;">
+                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per descrizione..." style="padding: 12px 15px;">
                 <button type="submit" class="btn btn-primary">Cerca</button>
             </div>
         </form>
@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded', function() {
 {# --- CSS AGGIORNATO --- #}
 <style>
 /* Stili Base Card/Header/Badge (invariati) */
-.card { border: 1px solid #e0e0e0; border-radius: 0.25rem; margin-bottom: 1rem; background-color: #fff; }
+.card { border: 1px solid #e0e0e0; border-radius: 0.75rem; margin-bottom: 1rem; background-color: #fff; }
 .card-header { background-color: #f8f9fa; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e0e0e0;}
 .card-body { padding: 1rem; }
 .card-footer { padding: 0.75rem 1rem; background-color: rgba(0,0,0,.03); border-top: 1px solid rgba(0,0,0,.125); }
@@ -281,7 +281,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .btn-close:hover { opacity: .75; }
 
 /* Stili Bottoni base */
-.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: .25rem; transition: all .15s ease-in-out; }
+.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: 0.55rem; transition: all .15s ease-in-out; }
 .btn-sm { padding: .25rem .5rem; font-size: .875rem; border-radius: .2rem; }
 .btn-primary { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
 .btn-secondary { color: #fff; background-color: #6c757d; border-color: #6c757d; }
@@ -290,7 +290,7 @@ document.addEventListener('DOMContentLoaded', function() {
 /* Altri stili bottone... */
 
 /* Utility base */
-.form-control { display: block; width: 100%; padding: .375rem .75rem; font-size: 1rem; font-weight: 400; line-height: 1.5; color: #212529; background-color: #fff; background-clip: padding-box; border: 1px solid #ced4da; appearance: none; border-radius: .25rem; transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out; }
+.form-control { display: block; width: 100%; padding: .375rem .75rem; font-size: 1rem; font-weight: 400; line-height: 1.5; color: #212529; background-color: #fff; background-clip: padding-box; border: 0.50px solid #ced4da; appearance: none; border-radius: 0.50rem; transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out; }
 .form-label { margin-bottom: .5rem; }
 .text-muted { color: #6c757d !important; }
 .d-inline-flex { display: inline-flex !important; }
