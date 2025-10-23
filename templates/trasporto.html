@@ -8,52 +8,92 @@
 </div>
 
 <form action="{{ url_for('assign_all_vettori') }}" method="POST">
-    
+
     {% if ordini_per_data %}
         {% for data, ordini_del_giorno in ordini_per_data.items() %}
             <h2 style="font-size: 1.2rem; font-weight: 600; color: var(--primary-text-color); margin-bottom: 1rem; padding-left: 10px;">{{ data }}</h2>
-            
+
             <div style="margin-bottom: 2.5rem;">
                 {% for order in ordini_del_giorno %}
                 {% set order_key = order.sigla ~ ':' ~ order.serie ~ ':' ~ order.numero %}
-                <div class="card">
+                <div class="card mb-3"> {# Aggiunto mb-3 per spazio #}
                     <div class="card-body" style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
                         <div>
                             <p style="font-weight: 600; margin: 0 0 4px 0;">{{ order.ragione_sociale }}</p>
+                            {# --- MODIFICA: Usa indirizzo_effettivo e localita_effettiva --- #}
                             <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">
-                                📍 {{ order.indirizzo }}, {{ order.localita }}
+                                📍 {{ order.indirizzo_effettivo or 'Indirizzo Mancante' }}, {{ order.localita_effettiva or 'Località Mancante' }}
+                                {# Opzionale: Mostra fonte per debug #}
+                                {# <small class="text-muted d-block">(Fonte: {{ order.fonte_indirizzo }})</small> #}
                             </p>
+                            {# --- FINE MODIFICA --- #}
                         </div>
-                        
+
+                        {# Segmented control per vettore (invariato) #}
                         <div class="segmented-control">
-                            <input type="radio" name="vettore_{{ order_key }}" id="nessuno_{{ order.numero }}" value="" {% if not order.vettore_assegnato %}checked{% endif %}>
+                            <input type="radio" name="vettore_{{ order_key }}" id="nessuno_{{ order.numero }}" value="" {% if not order.vettore_assegnato_info %}checked{% endif %}>
                             <label for="nessuno_{{ order.numero }}">Nessuno</label>
                             {% for vettore in vettori %}
-                                <input type="radio" name="vettore_{{ order_key }}" id="{{ vettore.codice }}_{{ order.numero }}" value="{{ vettore.codice }}" {% if order.vettore_assegnato == vettore.codice %}checked{% endif %}>
+                                <input type="radio" name="vettore_{{ order_key }}" id="{{ vettore.codice }}_{{ order.numero }}" value="{{ vettore.codice }}" {% if order.vettore_assegnato_info and order.vettore_assegnato_info.codice == vettore.codice %}checked{% endif %}>
                                 <label for="{{ vettore.codice }}_{{ order.numero }}">{{ vettore.ragione_sociale or vettore.descrizione }}</label>
                             {% endfor %}
                         </div>
 
+                        {# Input note autista (invariato) #}
                         <div>
                             <label for="nota_autista_{{ order_key }}" style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">Note per Autista:</label>
                             <input type="text" name="nota_autista_{{ order_key }}" id="nota_autista_{{ order_key }}" class="form-control" value="{{ order.nota_autista }}" placeholder="Es: Contattare Sig. Rossi" style="padding: 8px 12px; margin-top: 4px;">
                         </div>
-                        </div>
+                    </div>
                 </div>
                 {% endfor %}
             </div>
         {% endfor %}
     {% else %}
-        <div class="card">
-            <div class="card-body" style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">
-                Nessun ordine da assegnare.
-            </div>
-        </div>
+        {# Messaggio nessun ordine (invariato) #}
+        <div class="card"><div class="card-body text-center p-4 text-muted">Nessun ordine da assegnare.</div></div>
     {% endif %}
 
+    {# Bottoni sticky (invariati) #}
     <div style="position: sticky; bottom: 95px; display: flex; justify-content: center; gap: 1rem; background-color: rgba(245, 245, 247, 0.8); backdrop-filter: blur(10px); padding: 1rem; border-radius: 16px; box-shadow: 0 -4px 15px rgba(0,0,0,0.05);">
         <button type="submit" class="btn btn-primary">Salva Assegnazioni</button>
         <a href="{{ url_for('calcola_giri') }}" class="btn btn-success">Calcola Giri</a>
     </div>
 </form>
+
+{# Stile per segmented control (se necessario) #}
+<style>
+.segmented-control { display: flex; flex-wrap: wrap; gap: 5px; border-radius: 8px; overflow: hidden; border: 1px solid #ccc; padding: 3px; background-color: #eee;}
+.segmented-control input[type="radio"] { display: none; }
+.segmented-control label {
+    flex: 1 1 auto; /* Permette ai label di andare a capo */
+    padding: 8px 10px;
+    text-align: center;
+    background-color: #fff;
+    border: 1px solid transparent; /* Per evitare shift al check */
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    font-size: 0.9rem;
+    border-radius: 6px; /* Arrotonda ogni bottone */
+    color: #333;
+}
+.segmented-control input[type="radio"]:checked + label {
+    background-color: var(--bs-primary, #0d6efd); /* Usa variabile Bootstrap se disponibile */
+    color: white;
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+/* Stili base mancanti */
+.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: .25rem; transition: all .15s ease-in-out; }
+.btn-primary { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
+.btn-success { color: #fff; background-color: #198754; border-color: #198754; }
+.form-control { display: block; width: 100%; padding: .375rem .75rem; font-size: 1rem; font-weight: 400; line-height: 1.5; color: #212529; background-color: #fff; background-clip: padding-box; border: 1px solid #ced4da; appearance: none; border-radius: .25rem; transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out; }
+.card { border: 1px solid #e0e0e0; border-radius: 0.25rem; margin-bottom: 1rem; background-color: #fff; }
+.card-body { padding: 1rem; }
+.mb-3 { margin-bottom: 1rem !important; }
+.p-4 { padding: 1.5rem !important; }
+.text-center { text-align: center !important; }
+.text-muted { color: #6c757d !important; }
+
+</style>
 {% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Clienti e Indirizzi{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Clienti e Indirizzi Spedizione</h1>
+    {# Aggiungi qui eventuali filtri o pulsanti se necessario #}
+</div>
+
+{# Mostra messaggi flash (errori API, ecc.) #}
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category or 'info' }} alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
+
+
+<div class="accordion" id="clientAccordion">
+    {% if clients %}
+        {% for client in clients %}
+            {% set client_code = client.codice %}
+            {% set client_addresses = addresses_map.get(client_code, []) %}
+            {% set has_addresses = client_addresses|length > 0 %}
+            {% set collapse_id = "collapse-" ~ client_code | replace('.', '-') %} {# ID univoco per collapse #}
+            {% set header_id = "header-" ~ client_code | replace('.', '-') %}
+
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="{{ header_id }}">
+                    <button class="accordion-button collapsed" {# Inizia chiuso #}
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#{{ collapse_id }}"
+                            aria-expanded="false"
+                            aria-controls="{{ collapse_id }}">
+                        {# Mostra nome cliente e numero indirizzi #}
+                        <span class="me-auto">{{ client.ragione_sociale or 'N/D' }} ({{ client_code }})</span>
+                        <span class="badge bg-secondary rounded-pill">
+                            {{ client_addresses|length }} Indirizzi
+                        </span>
+                    </button>
+                </h2>
+                <div id="{{ collapse_id }}"
+                     class="accordion-collapse collapse"
+                     aria-labelledby="{{ header_id }}"
+                     data-bs-parent="#clientAccordion"> {# Lega all'accordion principale #}
+                    <div class="accordion-body">
+                        {# Indirizzo Principale Cliente (dall'anagrafica) #}
+                        <div class="mb-3 p-2 bg-light border rounded">
+                             <strong>Indirizzo Anagrafica:</strong><br>
+                             {{ client.indirizzo or 'N/D' }}, {{ client.localita or 'N/D' }}
+                             {# Aggiungi altri dettagli se disponibili in 'client' #}
+                        </div>
+
+                        {# Elenco Indirizzi Spedizione Specifici #}
+                        {% if has_addresses %}
+                            <h5>Indirizzi di Spedizione Specifici:</h5>
+                            <ul class="list-group">
+                                {% for addr in client_addresses %}
+                                    <li class="list-group-item">
+                                        <strong>{{ addr.descrizione or ('ID: ' ~ addr.id) }}</strong><br>
+                                        {{ addr.indirizzo or 'N/D' }}<br>
+                                        {{ addr.cap or '' }} {{ addr.localita or 'N/D' }} ({{ addr.provincia or 'N/D' }})
+                                        {# Aggiungi altri dettagli indirizzo se utili #}
+                                        {# Es: {% if addr.telefono1 %} <br>Tel: {{ addr.telefono1 }} {% endif %} #}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="text-muted">Nessun indirizzo di spedizione specifico trovato per questo cliente.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <div class="alert alert-warning" role="alert">
+            Nessun cliente trovato o errore nel caricamento.
+        </div>
+    {% endif %}
+</div>
+
+{# Stili CSS base (potrebbero essere in base.html) #}
+<style>
+.accordion-button:focus { box-shadow: none; }
+.accordion-button:not(.collapsed) { color: #0c63e4; background-color: #e7f1ff; }
+.accordion-button .badge { margin-left: 1rem; }
+.accordion-body strong { font-weight: 500; }
+.list-group-item strong { font-weight: 500; display: block; margin-bottom: 0.2rem;}
+
+/* Stili Alert (duplicati da risposte precedenti, idealmente in base.html) */
+.alert { position: relative; padding: 1rem 1rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
+.alert-success { color: #0f5132; background-color: #d1e7dd; border-color: #badbcc; }
+.alert-danger { color: #842029; background-color: #f8d7da; border-color: #f5c2c7; }
+.alert-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
+.alert-info { color: #055160; background-color: #cff4fc; border-color: #b6effb; }
+.alert-dismissible { padding-right: 3rem; }
+.alert-dismissible .btn-close { position: absolute; top: 0; right: 0; z-index: 2; padding: 1.25rem 1rem; }
+.btn-close { box-sizing: content-box; width: 1em; height: 1em; padding: .25em .25em; color: #000; background: transparent url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23000'%3e%3cpath d='M.293.293a1 1 0 0 1 1.414 0L8 6.586 14.293.293a1 1 0 1 1 1.414 1.414L9.414 8l6.293 6.293a1 1 0 0 1-1.414 1.414L8 9.414l-6.293 6.293a1 1 0 0 1-1.414-1.414L6.586 8 .293 1.707a1 1 0 0 1 0-1.414z'/%3e%3c/svg%3e") center/1em auto no-repeat; border: 0; border-radius: .25rem; opacity: .5; }
+.btn-close:hover { opacity: .75; }
+
+/* Utility Bootstrap */
+.me-auto { margin-right: auto !important; }
+.mb-3 { margin-bottom: 1rem !important; }
+.p-2 { padding: 0.5rem !important; }
+.bg-light { background-color: #f8f9fa !important; }
+.border { border: 1px solid #dee2e6 !important; }
+.rounded { border-radius: .25rem !important; }
+.rounded-pill { border-radius: 50rem !important; }
+.list-group { display: flex; flex-direction: column; padding-left: 0; margin-bottom: 0; border-radius: .25rem; }
+.list-group-item { position: relative; display: block; padding: .75rem 1.25rem; background-color: #fff; border: 1px solid rgba(0,0,0,.125); }
+.list-group-item:first-child { border-top-left-radius: inherit; border-top-right-radius: inherit; }
+.list-group-item:last-child { border-bottom-right-radius: inherit; border-bottom-left-radius: inherit; }
+.list-group-item + .list-group-item { border-top-width: 0; }
+.text-muted { color: #6c757d !important; }
+
+</style>
+
+{% endblock %}

@@ -7,58 +7,302 @@
     <h1>Magazzino</h1>
 </div>
 
+{# Form di ricerca invariato #}
 <div class="card" style="margin-bottom: 1.5rem;">
     <div class="card-body" style="padding: 1rem;">
         <form method="GET" action="{{ url_for('magazzino') }}">
             <div style="display: flex; gap: 1rem;">
-                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per nome articolo..." style="padding: 12px 15px;">
+                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per codice o descrizione..." style="padding: 12px 15px;">
                 <button type="submit" class="btn btn-primary">Cerca</button>
             </div>
         </form>
     </div>
 </div>
 
+{# Area per messaggi di feedback aggiornamento (Globale) #}
+<div id="update-feedback" style="margin-bottom: 1rem;"></div>
+
 <div class="article-card-list">
     {% if articles %}
         {% for article in articles %}
-        <div class="card">
+        <div class="card mb-3">
             <div class="card-body">
+                {# Descrizione e Codice #}
                 <p style="font-weight: 600; font-size: 1.1rem; margin: 0 0 4px 0; color: var(--primary-text-color);">
                     {{ article.descr_completa or article.descrizione }}
                 </p>
-                <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0 0 1rem 0;">
-                    Cod: {{ article.codice }}
-                </p>
-                
+                {# --- MODIFICA: Ripristina visualizzazione cod alt e mantieni bottone --- #}
+                <div style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0 0 1rem 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px;"> {# Aggiunto flex-wrap e gap #}
+                    <span>Cod: {{ article.codice }}</span>
+                    <span>|</span>
+                    {# Visualizzazione Cod Alt con Pulsante Modifica #}
+                    <span class="alt-code-display d-inline-flex align-items-center"> {# Usiamo d-inline-flex #}
+                        Alt:
+                        <span class="current-alt-code mx-1 fw-bold"> {# Aggiunto fw-bold e margine #}
+                            {{ article.cod_alternativo if article.cod_alternativo != 'N/D' else '-' }}
+                        </span>
+                        {# Pulsante Modifica che apre la modale #}
+                        <button class="btn btn-sm btn-outline-secondary edit-alt-code-btn"
+                                type="button"
+                                data-bs-toggle="modal"
+                                data-bs-target="#editAltCodeModal"
+                                data-article-code="{{ article.codice }}"
+                                data-current-alt-code="{{ article.cod_alternativo if article.cod_alternativo != 'N/D' else '' }}"
+                                data-article-description="{{ article.descr_completa or article.descrizione }}">
+                            {# Icona Matita SVG (Bootstrap Icons) #}
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-pencil-square" viewBox="0 0 16 16">
+                                <path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/>
+                                <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5v11z"/>
+                            </svg>
+                        </button>
+                    </span>
+                </div>
+                {# --- FINE MODIFICA --- #}
+
+                {# Giacenza e Prezzo (invariati) #}
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; text-align: center;">
                     <div style="background-color: #f5f5f7; padding: 10px; border-radius: 8px;">
                         <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">GIACENZA NETTA</div>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: {% if article.giacenza_netta < 0 %}var(--danger-color){% else %}var(--primary-text-color){% endif %};">
-                            {{ "%.2f"|format(article.giacenza_netta) }}
+                        <div style="font-size: 1.5rem; font-weight: 700; color: {% if article.giacenza_netta is number and article.giacenza_netta < 0 %}var(--danger-color){% else %}var(--primary-text-color){% endif %};">
+                            {{ "%.2f"|format(article.giacenza_netta) if article.giacenza_netta is number else article.giacenza_netta }}
                         </div>
                     </div>
                     <div style="background-color: #f5f5f7; padding: 10px; border-radius: 8px;">
                         <div style="font-size: 0.8rem; color: var(--secondary-text-color); font-weight: 500;">PREZZO RETAIL</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: var(--accent-color);">
-                            € {{ "%.2f"|format(article.prezzo) }}
+                            {% if article.prezzo is number %}
+                                € {{ "%.2f"|format(article.prezzo) }}
+                            {% else %}
+                                {{ article.prezzo }}
+                            {% endif %}
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
+
+            </div> {# Fine card-body #}
+        </div> {# Fine card #}
         {% endfor %}
     {% elif query %}
-        <div class="card">
-            <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
-                Nessun articolo trovato per "{{ query }}".
-            </div>
-        </div>
+        {# Messaggio nessun risultato #}
+        <div class="card"><div class="card-body text-center text-muted p-4">Nessun articolo trovato per "{{ query }}".</div></div>
     {% else %}
-         <div class="card">
-            <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
-                Inizia una ricerca per visualizzare i risultati.
-            </div>
-        </div>
+        {# Messaggio iniziale #}
+        <div class="card"><div class="card-body text-center text-muted p-4">Inizia una ricerca per codice o descrizione.</div></div>
     {% endif %}
+</div> {# Fine article-card-list #}
+
+{# --- Modale Bootstrap (invariata) --- #}
+<div class="modal fade" id="editAltCodeModal" tabindex="-1" aria-labelledby="editAltCodeModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="editAltCodeModalLabel">Modifica Codice Alternativo</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-feedback" class="mb-3"></div> {# Area feedback modale #}
+        <p><strong>Articolo:</strong> <span id="modal-article-code"></span><br>
+           <small id="modal-article-description"></small>
+        </p>
+        <div class="mb-3">
+          <label for="modal-alt-code-input" class="form-label">Codice Alternativo:</label>
+          <input type="text" class="form-control" id="modal-alt-code-input" placeholder="Inserisci nuovo codice o lascia vuoto per rimuovere">
+          {# Input nascosto per mantenere il codice articolo #}
+          <input type="hidden" id="modal-hidden-article-code">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+        <button type="button" class="btn btn-primary" id="modal-save-alt-code-btn">Salva Modifiche</button>
+      </div>
+    </div>
+  </div>
 </div>
+{# --- FINE MODALE --- #}
+
+
+{# --- JAVASCRIPT PER MODALE (invariato) --- #}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // ... (Tutto il codice JavaScript rimane lo stesso della versione precedente) ...
+    const editAltCodeModal = new bootstrap.Modal(document.getElementById('editAltCodeModal')); // Inizializza modale Bootstrap
+    const editButtons = document.querySelectorAll('.edit-alt-code-btn');
+    const modalFeedbackDiv = document.getElementById('modal-feedback');
+    const modalArticleCodeSpan = document.getElementById('modal-article-code');
+    const modalArticleDescriptionSpan = document.getElementById('modal-article-description');
+    const modalAltCodeInput = document.getElementById('modal-alt-code-input');
+    const modalHiddenArticleCode = document.getElementById('modal-hidden-article-code');
+    const modalSaveButton = document.getElementById('modal-save-alt-code-btn');
+    const globalFeedbackDiv = document.getElementById('update-feedback'); // Feedback globale
+
+    // 1. Aprire e Popolare la Modale
+    editButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const articleCode = this.getAttribute('data-article-code');
+            const currentAltCode = this.getAttribute('data-current-alt-code');
+            const articleDescription = this.getAttribute('data-article-description');
+
+            modalArticleCodeSpan.textContent = articleCode;
+            modalHiddenArticleCode.value = articleCode;
+            modalArticleDescriptionSpan.textContent = articleDescription;
+            modalAltCodeInput.value = currentAltCode;
+            modalFeedbackDiv.innerHTML = '';
+            modalSaveButton.disabled = false;
+            modalSaveButton.textContent = 'Salva Modifiche';
+        });
+    });
+
+    // 2. Salvare le Modifiche dalla Modale
+    modalSaveButton.addEventListener('click', function() {
+        const articleCode = modalHiddenArticleCode.value;
+        const newAltCode = modalAltCodeInput.value.trim();
+        const saveButton = this;
+        let result = null; // Definisci result fuori dal try/catch
+
+        saveButton.disabled = true;
+        saveButton.textContent = 'Salvataggio...';
+        showModalFeedback(`Salvataggio codice alternativo per ${articleCode}...`, 'info');
+
+        fetch("{{ url_for('update_alt_code_api') }}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                article_code: articleCode,
+                alt_code: newAltCode
+            })
+        })
+        .then(response => response.json().then(data => ({ ok: response.ok, status: response.status, data: data })))
+        .then(apiResult => { // Rinomina variabile locale
+             result = apiResult; // Assegna a variabile esterna per finally
+             if (result.ok && result.data.status === 'success') {
+                showModalFeedback(`Codice alternativo aggiornato a "${newAltCode || '-'}"!`, 'success');
+                // Aggiorna visivamente il codice nella card sulla pagina principale
+                const cardAltCodeSpan = document.querySelector(`.card .edit-alt-code-btn[data-article-code="${articleCode}"]`)
+                                          ?.closest('.alt-code-display')
+                                          ?.querySelector('.current-alt-code');
+                if (cardAltCodeSpan) {
+                    cardAltCodeSpan.textContent = newAltCode || '-';
+                    // Aggiorna anche il data attribute del bottone
+                     const editBtn = cardAltCodeSpan.closest('.alt-code-display').querySelector('.edit-alt-code-btn');
+                     if(editBtn) editBtn.setAttribute('data-current-alt-code', newAltCode);
+                }
+                setTimeout(() => { editAltCodeModal.hide(); }, 1500);
+
+            } else {
+                console.error("Errore aggiornamento:", result);
+                showModalFeedback(`Errore: ${result.data.message || `Status ${result.status}`}`, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Errore Fetch:', error);
+            showModalFeedback(`Errore di rete durante l'aggiornamento.`, 'danger');
+        })
+        .finally(() => {
+             // Riabilita bottone solo se non c'è stato successo
+             if (!(result && result.ok && result.data.status === 'success')) {
+                saveButton.disabled = false;
+                saveButton.textContent = 'Salva Modifiche';
+             }
+        });
+    });
+
+    // ... (showModalFeedback, showGlobalFeedback invariate) ...
+    function showModalFeedback(message, type = 'info') {
+        if (!modalFeedbackDiv) return;
+        modalFeedbackDiv.innerHTML = `
+            <div class="alert alert-${type} mb-0" role="alert">
+                ${message}
+            </div>`;
+    }
+    function showGlobalFeedback(message, type = 'info') {
+        if (!globalFeedbackDiv) return;
+        globalFeedbackDiv.innerHTML = `
+            <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>`;
+    }
+
+});
+</script>
+{# --- FINE JAVASCRIPT AGGIORNATO --- #}
+
+
+{# --- CSS AGGIORNATO --- #}
+<style>
+/* Stili Base Card/Header/Badge (invariati) */
+.card { border: 1px solid #e0e0e0; border-radius: 0.25rem; margin-bottom: 1rem; background-color: #fff; }
+.card-header { background-color: #f8f9fa; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e0e0e0;}
+.card-body { padding: 1rem; }
+.card-footer { padding: 0.75rem 1rem; background-color: rgba(0,0,0,.03); border-top: 1px solid rgba(0,0,0,.125); }
+.bg-light { background-color: #f8f9fa !important; }
+.badge { display: inline-block; padding: .35em .65em; font-size: .75em; font-weight: 700; line-height: 1; color: #fff; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: .25rem; }
+.bg-primary { background-color: #0d6efd !important; }
+.bg-secondary { background-color: #6c757d !important; }
+.bg-success { background-color: #198754 !important; }
+.bg-danger { background-color: #dc3545 !important; }
+.bg-warning { background-color: #ffc107 !important; }
+.text-dark { color: #212529 !important; }
+.text-success { color: #198754 !important; }
+.fw-bold { font-weight: 700 !important; } /* Aggiunto stile bold */
+.me-1 { margin-right: 0.25rem !important; } /* Aggiunto margine */
+.mx-1 { margin-left: 0.25rem !important; margin-right: 0.25rem !important; } /* Aggiunto margine orizzontale */
+.mb-3 { margin-bottom: 1rem !important; }
+
+/* Header Pagina */
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #dee2e6; }
+.header h1 { font-size: 1.8rem; }
+
+/* Stile Codice Alternativo e Bottone Modifica */
+.alt-code-display { display: inline-flex; align-items: center; /* Era già corretto */ }
+.current-alt-code { /* Rimosso fw-bold da qui, aggiunto sopra con classe bootstrap */ }
+.edit-alt-code-btn { padding: 0.1rem 0.3rem; line-height: 1; /* Stile bottone piccolo */ }
+.edit-alt-code-btn svg { vertical-align: baseline; }
+
+/* Feedback Scanner (invariato) */
+#scan-message { padding: 0.75rem 1.25rem; border: 1px solid transparent; border-radius: 0.25rem; margin-top: 0.75rem; text-align: center; font-weight: 500; }
+#scan-message:empty { display: none; }
+#scan-message.text-success { color: #0f5132; background-color: #d1e7dd; border-color: #badbcc; }
+#scan-message.text-danger { color: #842029; background-color: #f8d7da; border-color: #f5c2c7; }
+#scan-message.text-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
+#scan-message.text-info { color: #055160; background-color: #cff4fc; border-color: #b6effb; }
+
+/* Stili Alert (per feedback globale e modale) */
+.alert { position: relative; padding: 1rem 1rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
+.alert-success { color: #0f5132; background-color: #d1e7dd; border-color: #badbcc; }
+.alert-danger { color: #842029; background-color: #f8d7da; border-color: #f5c2c7; }
+.alert-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
+.alert-info { color: #055160; background-color: #cff4fc; border-color: #b6effb; }
+.alert-dismissible { padding-right: 3rem; }
+.alert-dismissible .btn-close { position: absolute; top: 0; right: 0; z-index: 2; padding: 1.25rem 1rem; }
+.btn-close { box-sizing: content-box; width: 1em; height: 1em; padding: .25em .25em; color: #000; background: transparent url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23000'%3e%3cpath d='M.293.293a1 1 0 0 1 1.414 0L8 6.586 14.293.293a1 1 0 1 1 1.414 1.414L9.414 8l6.293 6.293a1 1 0 0 1-1.414 1.414L8 9.414l-6.293 6.293a1 1 0 0 1-1.414-1.414L6.586 8 .293 1.707a1 1 0 0 1 0-1.414z'/%3e%3c/svg%3e") center/1em auto no-repeat; border: 0; border-radius: .25rem; opacity: .5; }
+.btn-close:hover { opacity: .75; }
+
+/* Stili Bottoni base */
+.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: .25rem; transition: all .15s ease-in-out; }
+.btn-sm { padding: .25rem .5rem; font-size: .875rem; border-radius: .2rem; }
+.btn-primary { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
+.btn-secondary { color: #fff; background-color: #6c757d; border-color: #6c757d; }
+.btn-outline-secondary { color: #6c757d; border-color: #6c757d; background-color: transparent;}
+.btn-outline-secondary:hover { color: #fff; background-color: #6c757d; border-color: #6c757d;}
+/* Altri stili bottone... */
+
+/* Utility base */
+.form-control { display: block; width: 100%; padding: .375rem .75rem; font-size: 1rem; font-weight: 400; line-height: 1.5; color: #212529; background-color: #fff; background-clip: padding-box; border: 1px solid #ced4da; appearance: none; border-radius: .25rem; transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out; }
+.form-label { margin-bottom: .5rem; }
+.text-muted { color: #6c757d !important; }
+.d-inline-flex { display: inline-flex !important; }
+.align-items-center { align-items: center !important; }
+.flex-wrap { flex-wrap: wrap !important; }
+.gap-2 { gap: .5rem !important; }
+.gap-3 { gap: 1rem !important; }
+
+
+</style>
+
+{# Assicurati che il JS di Bootstrap sia caricato (di solito in base.html) per la modale #}
+
 {% endblock %}
+

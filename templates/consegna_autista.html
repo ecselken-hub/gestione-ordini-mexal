@@ -5,79 +5,162 @@
 {% block content %}
 <div class="header">
     <h1>Giro di {{ autista_nome }}</h1>
-    <a href="{{ url_for('autisti') }}" class="btn btn-secondary">Cambia</a>
+    <a href="{{ url_for('autisti') }}" class="btn btn-secondary">Cambia Autista</a>
 </div>
 
+{# Riepilogo Giro (invariato) #}
 {% if giro %}
-    <div class="card">
+    <div class="card mb-3">
         <div class="card-body" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; text-align: center;">
             <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">DATA</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.data }}</div></div>
             <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">N° CONSEGNE</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.num_consegne }}</div></div>
             <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">KM PREVISTI</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.km_previsti.split(' ')[0] }}</div></div>
-            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">TEMPO PREVISTO</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.tempo_previsto }}</div></div>
+            <div class="p-2"><div style="font-size: 0.8rem; font-weight: 500; color: var(--secondary-text-color);">TEMPO PREVISTO</div><div style="font-size: 1.2rem; font-weight: 600;">{{ giro.tempo_totale_stimato or giro.tempo_previsto }}</div></div> {# Usa tempo_totale_stimato se esiste #}
         </div>
     </div>
     <h2 style="margin-top: 2.5rem; margin-bottom: 1rem; font-size: 1.5rem;">Tappe {% if giro %}Ottimizzate{% endif %}</h2>
 {% endif %}
 
+{# Elenco Tappe #}
 {% if tappe %}
     {% for tappa in tappe %}
-    <div class="card">
+    {% set order_key = tappa.sigla ~ ':' ~ tappa.serie ~ ':' ~ tappa.numero %} {# Ricostruisci order_key #}
+    <div class="card mb-3"> {# Aggiunto mb-3 #}
         <div class="card-header" style="font-weight: 600;">
-             {% if giro %}Tappa {{ loop.index }}: {% endif %}{{ tappa.ragione_sociale }} - <span style="color: var(--secondary-text-color);">{{ tappa.localita }}</span>
+             {# Mostra indice tappa se giro calcolato #}
+             {% if giro %}Tappa {{ loop.index }}: {% endif %}
+             {{ tappa.ragione_sociale }} - <span style="color: var(--secondary-text-color);">{{ tappa.localita_effettiva or 'N/D' }}</span> {# Usa localita_effettiva #}
         </div>
         <div class="card-body">
             <div style="display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: start;">
-                
+
+                {# Bottoni Spostamento Tappa (se giro calcolato) #}
                 <div style="display: flex; flex-direction: column; gap: 0.5rem; align-items: center; justify-content: center; height: 100%;">
-                    <form action="{{ url_for('move_tappa', autista_nome=autista_nome, index=loop.index0, direction='up') }}" method="POST">
-                        <button type="submit" class="btn btn-secondary" style="padding: 5px 10px; font-size: 1rem;" 
-                                {% if not giro or loop.first %}disabled{% endif %}>▲</button>
-                    </form>
-                    <form action="{{ url_for('move_tappa', autista_nome=autista_nome, index=loop.index0, direction='down') }}" method="POST">
-                        <button type="submit" class="btn btn-secondary" style="padding: 5px 10px; font-size: 1rem;" 
-                                {% if not giro or loop.last %}disabled{% endif %}>▼</button>
-                    </form>
+                    {% if giro %} {# Mostra solo se il giro è calcolato/ordinato #}
+                        <form action="{{ url_for('move_tappa', autista_nome=autista_nome, index=loop.index0, direction='up') }}" method="POST">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.first %}disabled{% endif %} aria-label="Sposta su">▲</button>
+                        </form>
+                        <form action="{{ url_for('move_tappa', autista_nome=autista_nome, index=loop.index0, direction='down') }}" method="POST">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary" {% if loop.last %}disabled{% endif %} aria-label="Sposta giù">▼</button>
+                        </form>
+                    {% endif %}
                 </div>
 
+                {# Dettagli Tappa #}
                 <div>
-                    <p style="margin: 0;"><strong>📍 Indirizzo:</strong> {{ tappa.indirizzo }}, {{ tappa.localita }}</p>
-                    <p style="margin: 4px 0 0 0;"><strong>📞 Telefono:</strong> {{ tappa.telefono }}</p>
+                    {# --- MODIFICA: Usa indirizzo_effettivo e localita_effettiva --- #}
+                    <p style="margin: 0;"><strong>📍 Indirizzo:</strong> {{ tappa.indirizzo_effettivo or 'Indirizzo Mancante' }}, {{ tappa.localita_effettiva or 'Località Mancante' }}</p>
+                    {# --- FINE MODIFICA --- #}
+                    {# Telefono: usa quello specifico della spedizione se presente, altrimenti fallback #}
+                    <p style="margin: 4px 0 0 0;"><strong>📞 Telefono:</strong> {{ tappa.telefono_spedizione or tappa.telefono or 'N/D' }}</p>
                     {% if tappa.nota_autista %}<p style="margin: 4px 0 0 0;"><strong>⚠️ Note Autista:</strong> <span style="color: var(--danger-color); font-weight: 600;">{{ tappa.nota_autista }}</span></p>{% endif %}
                     {% if tappa.nota %}<p style="margin: 4px 0 0 0;"><strong>📝 Note Cliente:</strong> <span style="color: #666;">{{ tappa.nota }}</span></p>{% endif %}
-                    <p style="border-top: 1px solid var(--separator-color); padding-top: 1rem; margin-top: 1rem; margin-bottom: 0;">
+
+                    {# Finestra Oraria e Orario Previsto #}
+                    <p style="border-top: 1px solid #eee; padding-top: 0.75rem; margin-top: 0.75rem; margin-bottom: 0;">
                         <strong>🕒 Finestra:</strong> {{ tappa.orario1_start or 'N/D' }} - {{ tappa.orario1_end or 'N/D' }}
-                        {% if tappa.orario_previsto %}<br><strong>Orario Previsto:</strong> <span style="font-weight: 600; color: var(--accent-color);">{{ tappa.orario_previsto }}</span>{% endif %}
+                        {% if tappa.orario_previsto and tappa.orario_previsto != 'Rientro' %}
+                            <br><strong>Orario Previsto Arrivo:</strong> <span style="font-weight: 600; color: var(--accent-color);">~ {{ tappa.orario_previsto }}</span>
+                        {% endif %}
                     </p>
-                    <p style="border-top: 1px solid var(--separator-color); padding-top: 1rem; margin-top: 1rem; margin-bottom: 0;">
-                        <strong>Pagamento:</strong> {{ tappa.pagamento_desc }} | <strong>Colli:</strong> {{ tappa.colli_da_consegnare }}
+
+                    {# Pagamento e Colli #}
+                    <p style="border-top: 1px solid #eee; padding-top: 0.75rem; margin-top: 0.75rem; margin-bottom: 0;">
+                        <strong>Pagamento:</strong> {{ tappa.pagamento_desc or 'N/D' }} | <strong>Colli:</strong> {{ tappa.colli_da_consegnare or 'N/D' }}
                     </p>
+
+                     {# Orari Effettivi (se presenti) #}
                      {% if tappa.start_time %}
-                        <div style="margin-top: 1rem; font-size: 0.8rem;">
-                            <span class="badge bg-primary">Inizio: {{ tappa.start_time }}</span>
+                        <div style="margin-top: 0.75rem; font-size: 0.8rem;">
+                            <span class="badge bg-info text-dark">Inizio: {{ tappa.start_time }}</span>
                             {% if tappa.end_time %}
                                 <span class="badge bg-success">Fine: {{ tappa.end_time }}</span>
+                                {% if tappa.durata_effettiva_min is not none %}
+                                    <span class="badge bg-light text-dark">Durata: {{ tappa.durata_effettiva_min }} min</span>
+                                {% endif %}
                             {% endif %}
                         </div>
                     {% endif %}
                 </div>
 
-                <div style="text-align: center; display: flex; flex-direction: column; justify-content: center; gap: 1rem;">
-                    <a href="https://www.google.com/maps/dir/?api=1&destination={{ tappa.indirizzo|urlencode }},{{ tappa.localita|urlencode }}" target="_blank" class="btn btn-secondary">🗺️ MAPPA</a>
-                    {% if not tappa.start_time %}
-                        <form action="{{ url_for('start_consegna') }}" method="POST"><input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}"><input type="hidden" name="autista_nome" value="{{ autista_nome }}"><button type="submit" class="btn btn-primary" style="width: 100%;">Inizia</button></form>
-                    {% elif not tappa.end_time %}
-                         <div style="font-size: 0.9rem;"><span class="badge bg-primary">Iniziato: {{ tappa.start_time }}</span></div>
-                         <form action="{{ url_for('end_consegna') }}" method="POST"><input type="hidden" name="order_key" value="{{ tappa.sigla }}:{{ tappa.serie }}:{{ tappa.numero }}"><input type="hidden" name="autista_nome" value="{{ autista_nome }}"><button type="submit" class="btn btn-success" style="width: 100%;">Fine</button></form>
-                    {% else %}
-                        <div style="font-size: 0.9rem;"><span class="badge bg-success">Completato</span></div>
+                {# Azioni Tappa (Mappa, Inizia/Fine) #}
+                <div style="text-align: center; display: flex; flex-direction: column; justify-content: start; gap: 0.75rem;">
+                    {# --- MODIFICA: Usa indirizzo_effettivo nel link mappa --- #}
+                    <a href="https://www.google.com/maps/search/?api=1&query={{ (tappa.indirizzo_effettivo ~ ',' ~ tappa.localita_effettiva) | urlencode }}" target="_blank" class="btn btn-outline-primary btn-sm">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-geo-alt-fill" viewBox="0 0 16 16">
+                          <path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10zm0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/>
+                        </svg>
+                        MAPPA
+                    </a>
+                    {# --- FINE MODIFICA --- #}
+
+                    {# Bottoni Inizia/Fine #}
+                    {% if tappa.status_consegna == 'Da Iniziare' %}
+                        <form action="{{ url_for('start_consegna') }}" method="POST" class="d-grid">
+                            <input type="hidden" name="order_key" value="{{ order_key }}">
+                            <input type="hidden" name="autista_nome" value="{{ autista_nome }}">
+                            <button type="submit" class="btn btn-primary">Inizia</button>
+                        </form>
+                    {% elif tappa.status_consegna == 'In Corso' %}
+                         <div class="badge bg-primary mb-2">In Corso...</div>
+                         <form action="{{ url_for('end_consegna') }}" method="POST" class="d-grid">
+                             <input type="hidden" name="order_key" value="{{ order_key }}">
+                             <input type="hidden" name="autista_nome" value="{{ autista_nome }}">
+                             <button type="submit" class="btn btn-success">Fine</button>
+                         </form>
+                    {% else %} {# Completata #}
+                        <div class="badge bg-success">Completata</div>
+                        {# Mostra durata se calcolata #}
+                        {% if tappa.durata_effettiva_min is not none %}
+                             <small class="text-muted d-block">{{ tappa.durata_effettiva_min }} min</small>
+                        {% endif %}
                     {% endif %}
                 </div>
             </div>
-        </div>
-    </div>
+        </div> {# Fine card-body #}
+    </div> {# Fine card #}
     {% endfor %}
 {% else %}
-    <div class="card"><div class="card-body" style="text-align: center;"><a href="{{ url_for('trasporto') }}" style="color: var(--accent-color);">Assegna ordini</a>.</div></div>
+    {# Messaggio nessun ordine assegnato #}
+    <div class="card">
+        <div class="card-body text-center p-4">
+            Nessuna tappa assegnata a questo autista.<br>
+            <a href="{{ url_for('trasporto') }}" class="btn btn-link mt-2">Vai ad Assegnazione Ordini</a>
+        </div>
+    </div>
 {% endif %}
+
+{# Stili base (potrebbero essere in base.html) #}
+<style>
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #dee2e6; }
+.header h1 { font-size: 1.8rem; }
+.card { border: 1px solid #e0e0e0; border-radius: 0.25rem; margin-bottom: 1rem; background-color: #fff; }
+.card-header { background-color: #f8f9fa; padding: 0.75rem 1rem; border-bottom: 1px solid #e0e0e0;}
+.card-body { padding: 1rem; }
+.badge { display: inline-block; padding: .35em .65em; font-size: .75em; font-weight: 700; line-height: 1; color: #fff; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: .25rem; }
+.bg-primary { background-color: #0d6efd !important; }
+.bg-secondary { background-color: #6c757d !important; }
+.bg-success { background-color: #198754 !important; }
+.bg-info { background-color: #0dcaf0 !important; }
+.bg-light { background-color: #f8f9fa !important; }
+.text-dark { color: #212529 !important; }
+.rounded-pill { border-radius: 50rem !important; }
+.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: .25rem; transition: all .15s ease-in-out; }
+.btn-sm { padding: .25rem .5rem; font-size: .875rem; border-radius: .2rem; }
+.btn-primary { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
+.btn-secondary { color: #fff; background-color: #6c757d; border-color: #6c757d; }
+.btn-success { color: #fff; background-color: #198754; border-color: #198754; }
+.btn-outline-primary { color: #0d6efd; border-color: #0d6efd; }
+.btn-outline-primary:hover { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
+.btn-outline-secondary { color: #6c757d; border-color: #6c757d; }
+.btn-outline-secondary:hover { color: #fff; background-color: #6c757d; border-color: #6c757d;}
+.btn-link { font-weight: 400; color: #0d6efd; text-decoration: underline; }
+.btn:disabled { pointer-events: none; opacity: .65; }
+.d-grid { display: grid !important; }
+.text-muted { color: #6c757d !important; }
+.mb-2 { margin-bottom: 0.5rem !important; }
+.mb-3 { margin-bottom: 1rem !important; }
+.mt-2 { margin-top: 0.5rem !important; }
+</style>
+
 {% endblock %}
