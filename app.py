@@ -1865,7 +1865,7 @@ def add_todo():
                 # Limita la lunghezza della descrizione nella notifica
                 description_short = (description[:40] + '...') if len(description) > 40 else description
                 notification_title = "Nuova Cosa da Fare!"
-                notification_body = f"Hai aggiunto: '{description_short}'"
+                notification_body = f"'{user_id}' Ha aggiunto: '{description_short}'"
 
                 print(f"Tentativo invio notifica ToDo a {user_id}")
                 # Chiama la funzione per inviare la notifica all'utente corrente
