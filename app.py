@@ -441,6 +441,29 @@ def load_all_data():
 
 
 # --- Rotte Principali (con Lock e Error Handling) ---
+
+@app.route('/')
+@login_required
+def dashboard():
+    """Reindirizza l'utente alla pagina appropriata in base al ruolo."""
+    if current_user.has_role('admin'):
+        return redirect(url_for('ordini_list'))
+    elif current_user.has_role('preparatore'):
+        return redirect(url_for('ordini_list'))
+    elif current_user.has_role('autista'):
+        # Se l'autista ha un nome specifico associato, va alla sua pagina consegne
+        if current_user.nome_autista:
+            return redirect(url_for('consegne_autista', autista_nome=current_user.nome_autista))
+        else:
+            # Altrimenti potrebbe andare a una pagina generica per autisti o dashboard
+            flash("Profilo autista non completamente configurato (nome mancante).", "warning")
+            return redirect(url_for('autisti')) # Pagina elenco autisti/giri
+    else:
+        # Ruolo non gestito o mancante
+        flash("Ruolo utente non definito o non autorizzato.", "danger")
+        logout_user() # Effettua il logout per sicurezza
+        return redirect(url_for('login'))
+    
 @app.route('/ordini')
 @login_required
 def ordini_list():
