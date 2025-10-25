@@ -97,7 +97,35 @@
             color: var(--danger-color); /* Rosso al passaggio del mouse */
             background-color: rgba(220, 53, 69, 0.1); /* Sfondo rosso leggero */
         }
-        /* --- FINE NUOVO STILE --- */
+
+        .refresh-button {
+            position: absolute; /* O fixed */
+            top: 15px;
+            /* Sposta un po' a sinistra per fare spazio al logout */
+            right: 60px; /* Adatta questo valore */
+            padding: 0.4rem 0.6rem;
+            font-size: 1.1rem; /* Dimensione icona */
+            line-height: 1;
+            color: var(--secondary-text-color);
+            background-color: transparent;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 1010;
+            transition: color 0.2s ease, transform 0.2s ease;
+        }
+        .refresh-button:hover {
+            color: var(--accent-color);
+        }
+        .refresh-button:active {
+            transform: rotate(180deg); /* Effetto rotazione al click */
+        }
+         /* Stile per spinner (Bootstrap) */
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+            border-width: .2em;
+        }
 
     </style>
     {% block head_extra %}{% endblock %}
@@ -110,6 +138,19 @@
     </a>
     {% endif %}
     {# --- FINE NUOVO POSIZIONAMENTO --- #}
+
+    {% if current_user.is_authenticated %}
+    <button id="manual-refresh-btn" class="refresh-button" title="Aggiorna Ordini" onclick="manualCheckUpdates();">
+        {# Icona SVG Refresh (Bootstrap Icons) #}
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-clockwise" viewBox="0 0 16 16">
+          <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+          <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+        </svg>
+        {# Spinner (nascosto inizialmente) #}
+        <span class="spinner-border spinner-border-sm ms-1" role="status" aria-hidden="true" style="display: none;"></span>
+    </button>
+    {% endif %}
+    {# --- FINE NUOVO BOTTONE --- #}
 
     <div id="update-banner" class="update-banner">
         Nuovi ordini trovati. Aggiornamento in corso...
@@ -250,12 +291,75 @@
             }
         }
     </script>
-    {% if enable_polling %}
     <script>
-        function checkUpdates() { /* ... codice polling invariato ... */ }
-        setInterval(checkUpdates, 120000);
+        function manualCheckUpdates() {
+            const refreshButton = document.getElementById('manual-refresh-btn');
+            const spinner = refreshButton ? refreshButton.querySelector('.spinner-border') : null;
+            const feedbackDiv = document.getElementById('manual-refresh-feedback');
+            const updateBanner = document.getElementById('update-banner');
+
+            if (!refreshButton) return;
+
+            console.log('Aggiornamento manuale: Controllo...');
+            refreshButton.disabled = true; // Disabilita bottone
+            if(spinner) spinner.style.display = 'inline-block'; // Mostra spinner
+            if(feedbackDiv) feedbackDiv.innerHTML = ''; // Pulisci feedback precedente
+
+            fetch("{{ url_for('check_updates') }}")
+                .then(response => {
+                    if (!response.ok) { throw new Error(`Errore HTTP ${response.status}`); }
+                    return response.json();
+                 })
+                .then(data => {
+                    if (data.new_data === true) {
+                        console.log('Aggiornamento manuale: Nuovi dati trovati! Ricaricamento...');
+                        if(updateBanner) updateBanner.style.display = 'block'; // Mostra banner ricaricamento
+                        // Mostra messaggio nel feedback div (opzionale)
+                        if(feedbackDiv) showManualRefreshFeedback("Nuovi dati trovati. Ricarico la pagina...", "info");
+                        setTimeout(() => {
+                            location.reload();
+                        }, 1000); // Attendi 1 sec prima di ricaricare
+                    } else {
+                        console.log('Aggiornamento manuale: Nessun nuovo dato.');
+                        showManualRefreshFeedback("Nessun nuovo ordine trovato.", "success"); // Messaggio positivo
+                    }
+                })
+                .catch(error => {
+                    console.error('Aggiornamento manuale: Errore durante il controllo:', error);
+                    showManualRefreshFeedback(`Errore durante l'aggiornamento: ${error.message}`, "danger");
+                })
+                .finally(() => {
+                     // Riabilita bottone e nascondi spinner (solo se non sta ricaricando)
+                     // Lo mettiamo dentro un piccolo timeout per dare tempo al reload di partire
+                     setTimeout(() => {
+                         if (refreshButton) refreshButton.disabled = false;
+                         if (spinner) spinner.style.display = 'none';
+                     }, 500);
+                });
+        }
+
+        function showManualRefreshFeedback(message, type = 'info') {
+             const feedbackDiv = document.getElementById('manual-refresh-feedback');
+             if (!feedbackDiv) return;
+             // Usa classi Alert di Bootstrap
+             feedbackDiv.innerHTML = `
+                 <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                     ${message}
+                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                 </div>`;
+             // Pulisci dopo un po' se non è un messaggio di ricaricamento
+             if (type !== 'info' || !message.includes("Ricarico")) { // Non pulire se sta ricaricando
+                 setTimeout(() => {
+                     const alertElement = feedbackDiv.querySelector('.alert');
+                     if (alertElement) {
+                         // Usa API Bootstrap per chiudere l'alert con animazione
+                         const bsAlert = bootstrap.Alert.getOrCreateInstance(alertElement);
+                         if (bsAlert) bsAlert.close();
+                     }
+                 }, 4000); // 4 secondi
+             }
+         }
     </script>
-    {% endif %}
 
     {% block scripts_extra %}{% endblock %}
 

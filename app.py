@@ -129,15 +129,18 @@ def logout():
 
 class TodoItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(80), nullable=False, index=True) # Username dell'utente
+    # user_id = db.Column(db.String(80), nullable=False, index=True) # ASSICURATI SIA RIMOSSO O COMMENTATO
+    created_by = db.Column(db.String(80), nullable=True, index=True) # DEVE ESSERE PRESENTE
     description = db.Column(db.String(200), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     is_completed = db.Column(db.Boolean, default=False, nullable=False)
-    completed_at = db.Column(db.DateTime, nullable=True) # Ora completamento
+    completed_at = db.Column(db.DateTime, nullable=True)
+    completed_by = db.Column(db.String(80), nullable=True) # DEVE ESSERE PRESENTE
 
     def __repr__(self):
         status = "Completato" if self.is_completed else "Da fare"
-        return f'<Todo {self.id} [{status}] - User: {self.user_id}>'
+        creator = self.created_by or "Sconosciuto"
+        return f'<Todo {self.id} [{status}] - By: {creator}>'
 
 # --- Modello DB PushSubscription (OK) ---
 class PushSubscription(db.Model):
@@ -1823,16 +1826,16 @@ def clienti_indirizzi():
                            active_page='clienti_indirizzi')
 
 @app.route('/todo')
-@login_required # Accessibile a tutti gli utenti loggati
+@login_required # Accessibile a tutti i loggati
 def todo_list():
-    """Visualizza la lista To-Do dell'utente corrente."""
-    user_id = current_user.id
+    """Visualizza la lista To-Do CONDIVISA."""
+    # user_id = current_user.id # Non serve più filtrare per utente
     try:
-        # Recupera task non completati e completati separatamente, ordinati
-        incomplete_tasks = TodoItem.query.filter_by(user_id=user_id, is_completed=False).order_by(TodoItem.created_at.desc()).all()
-        completed_tasks = TodoItem.query.filter_by(user_id=user_id, is_completed=True).order_by(TodoItem.completed_at.desc()).all()
+        # Recupera TUTTE le task, separate per stato
+        incomplete_tasks = TodoItem.query.filter_by(is_completed=False).order_by(TodoItem.created_at.desc()).all()
+        completed_tasks = TodoItem.query.filter_by(is_completed=True).order_by(TodoItem.completed_at.desc()).all()
     except Exception as e:
-        print(f"Errore DB leggendo ToDo per {user_id}: {e}")
+        print(f"Errore DB leggendo ToDo condivisa: {e}")
         flash("Errore nel caricamento delle cose da fare.", "danger")
         incomplete_tasks = []
         completed_tasks = []
@@ -1840,46 +1843,46 @@ def todo_list():
     return render_template('todo.html',
                            incomplete_tasks=incomplete_tasks,
                            completed_tasks=completed_tasks,
-                           active_page='todo') # Per evidenziare tab attiva
+                           active_page='todo')
 
 @app.route('/todo/add', methods=['POST'])
 @login_required
 def add_todo():
-    """Aggiunge una nuova task e invia una notifica push."""
+    """Aggiunge una nuova task CONDIVISA."""
     description = request.form.get('description', '').strip()
-    user_id = current_user.id
+    creator_id = current_user.id # Salva chi l'ha creata
 
     if not description:
         flash("La descrizione non può essere vuota.", "warning")
     else:
         try:
-            # Crea e salva la nuova task
-            new_task = TodoItem(user_id=user_id, description=description)
+            # Crea task senza user_id, ma con created_by
+            new_task = TodoItem(created_by=creator_id, description=description)
             db.session.add(new_task)
+            print(f"DEBUG [add_todo]: Tentativo commit nuova task CONDIVISA da {creator_id}: '{description}'")
             db.session.commit()
-            flash("Nuova cosa da fare aggiunta!", "success")
+            print(f"DEBUG [add_todo]: Commit Riuscito.")
+            flash("Nuova cosa da fare aggiunta alla lista condivisa!", "success")
 
-            # --- AGGIUNTA: Invia notifica push ---
+            # --- Invia notifica (a chi? Forse a tutti gli admin/preparatori?) ---
+            # Potresti modificare send_push_notification per inviare a un gruppo
+            # Per ora, invia solo a chi l'ha creata (come prima)
             try:
-                # Prepara titolo e corpo (puoi personalizzarli)
-                # Limita la lunghezza della descrizione nella notifica
                 description_short = (description[:40] + '...') if len(description) > 40 else description
-                notification_title = "Nuova Cosa da Fare!"
-                notification_body = f"'{user_id}' Ha aggiunto: '{description_short}'"
-
-                print(f"Tentativo invio notifica ToDo a {user_id}")
-                # Chiama la funzione per inviare la notifica all'utente corrente
-                send_push_notification(user_id, notification_title, notification_body)
-            except Exception as notify_err:
-                # Logga l'errore ma non bloccare l'utente
-                print(f"ERRORE [add_todo]: Fallito invio notifica push per {user_id}: {notify_err}")
-                # Potresti aggiungere un flash warning qui se vuoi informare l'utente
-                # flash("Cosa da fare aggiunta, ma errore invio notifica.", "warning")
-            # --- FINE AGGIUNTA ---
+                notification_title = "Nuova Cosa da Fare (Condivisa)"; notification_body = f"Aggiunto: '{description_short}'"
+                print(f"Tentativo invio notifica ToDo a {creator_id}")
+                send_push_notification(creator_id, notification_title, notification_body)
+                # QUI POTRESTI AGGIUNGERE UN CICLO PER INVIARE AD ALTRI UTENTI SE NECESSARIO
+                admin_users = [user for user, data in users_db.items() if 'admin' in data.get('roles', [])]
+                for admin in admin_users:
+                    if admin != creator_id: # Non inviare di nuovo a chi l'ha creata
+                        send_push_notification(admin, f"Nuova Task da {creator_id}", f"Aggiunto: '{description_short}'")
+            except Exception as notify_err: print(f"ERRORE [add_todo]: Fallito invio notifica push: {notify_err}")
+            # --- Fine Invio Notifica ---
 
         except Exception as e:
             db.session.rollback()
-            print(f"Errore DB aggiungendo ToDo per {user_id}: {e}")
+            print(f"ERRORE CRITICO [add_todo]: Fallito commit DB condiviso da {creator_id}: {e}")
             flash("Errore durante l'aggiunta della cosa da fare.", "danger")
 
     return redirect(url_for('todo_list'))
@@ -1887,54 +1890,79 @@ def add_todo():
 @app.route('/todo/toggle/<int:item_id>', methods=['POST'])
 @login_required
 def toggle_todo(item_id):
-    """Marca una task come completata o la riapre."""
-    user_id = current_user.id
+    """Marca una task CONDIVISA come completata o la riapre (solo admin/preparatori)."""
+    # --- AGGIUNTA CONTROLLO RUOLO ---
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        flash("Non hai i permessi per modificare lo stato delle task.", "warning")
+        return redirect(url_for('todo_list'))
+    # --- FINE CONTROLLO RUOLO ---
+
+    completer_id = current_user.id # Chi sta facendo l'azione
+    task = None
     try:
-        # Cerca la task specifica dell'utente
-        task = TodoItem.query.filter_by(id=item_id, user_id=user_id).first()
+        # Cerca task per ID, senza filtrare per utente
+        task = TodoItem.query.get(item_id) # Usa get per chiave primaria
         if task:
+            original_state = task.is_completed
             if task.is_completed:
-                # Ri-apri task
+                # Riapri
                 task.is_completed = False
-                task.completed_at = None # Rimuovi timestamp completamento
-                flash(f"'{task.description[:30]}...' riaperta.", "info")
+                task.completed_at = None
+                task.completed_by = None # Rimuovi chi l'aveva completata
+                action_msg = "riaperta"
+                flash_cat = "info"
             else:
-                # Completa task
+                # Completa
                 task.is_completed = True
-                task.completed_at = datetime.utcnow() # Imposta timestamp completamento
-                flash(f"'{task.description[:30]}...' completata!", "success")
-            db.session.commit() # Salva modifiche
+                task.completed_at = datetime.utcnow()
+                task.completed_by = completer_id # Salva chi l'ha completata
+                action_msg = "completata"
+                flash_cat = "success"
+
+            print(f"DEBUG [toggle_todo]: Tentativo commit toggle task CONDIVISA {item_id} da {completer_id} (da {original_state} a {task.is_completed})")
+            db.session.commit()
+            print(f"DEBUG [toggle_todo]: Commit Riuscito.")
+            flash(f"'{task.description[:30]}...' {action_msg}!", flash_cat)
         else:
-            # Task non trovata o non appartiene all'utente
-            flash("Operazione non trovata o non autorizzata.", "warning")
+            flash("Operazione non trovata.", "warning")
     except Exception as e:
         db.session.rollback()
-        print(f"Errore DB toggling ToDo {item_id} per {user_id}: {e}")
+        print(f"ERRORE CRITICO [toggle_todo]: Fallito commit DB condiviso per task {item_id}, user {completer_id}: {e}")
         flash("Errore durante l'aggiornamento dello stato.", "danger")
 
-    return redirect(url_for('todo_list')) # Torna alla lista
+    return redirect(url_for('todo_list'))
 
 @app.route('/todo/delete/<int:item_id>', methods=['POST'])
 @login_required
 def delete_todo(item_id):
-    """Elimina una task."""
-    user_id = current_user.id
+    """Elimina una task CONDIVISA (solo admin)."""
+    # --- AGGIUNTA CONTROLLO RUOLO ---
+    if not current_user.has_role('admin'):
+        flash("Non hai i permessi per eliminare le task.", "warning")
+        return redirect(url_for('todo_list'))
+    # --- FINE CONTROLLO RUOLO ---
+
+    deleter_id = current_user.id
+    task = None
     try:
-        # Cerca la task specifica dell'utente
-        task = TodoItem.query.filter_by(id=item_id, user_id=user_id).first()
+        # Cerca task per ID, senza filtrare per utente
+        task = TodoItem.query.get(item_id)
         if task:
-            description_short = task.description[:30] # Salva descrizione per messaggio
-            db.session.delete(task) # Elimina dal DB
-            db.session.commit() # Salva modifiche
+            description_short = task.description[:30]
+            db.session.delete(task)
+            print(f"DEBUG [delete_todo]: Tentativo commit delete task CONDIVISA {item_id} da {deleter_id}: '{description_short}'")
+            db.session.commit()
+            print(f"DEBUG [delete_todo]: Commit Riuscito.")
             flash(f"'{description_short}...' eliminata.", "success")
         else:
-            flash("Operazione non trovata o non autorizzata.", "warning")
+            flash("Operazione non trovata.", "warning")
     except Exception as e:
         db.session.rollback()
-        print(f"Errore DB eliminando ToDo {item_id} per {user_id}: {e}")
+        print(f"ERRORE CRITICO [delete_todo]: Fallito commit DB condiviso per task {item_id}, user {deleter_id}: {e}")
         flash("Errore durante l'eliminazione.", "danger")
 
-    return redirect(url_for('todo_list')) # Torna alla lista
+    return redirect(url_for('todo_list'))
+
 
 # --- NUOVA POSIZIONE: Creazione DB all'avvio, prima di app.run ---
 with app.app_context():
