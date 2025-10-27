@@ -129,18 +129,19 @@ def logout():
 
 class TodoItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    # user_id = db.Column(db.String(80), nullable=False, index=True) # ASSICURATI SIA RIMOSSO O COMMENTATO
-    created_by = db.Column(db.String(80), nullable=True, index=True) # DEVE ESSERE PRESENTE
+    created_by = db.Column(db.String(80), nullable=True, index=True)
     description = db.Column(db.String(200), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     is_completed = db.Column(db.Boolean, default=False, nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
-    completed_by = db.Column(db.String(80), nullable=True) # DEVE ESSERE PRESENTE
+    completed_by = db.Column(db.String(80), nullable=True)
+    assigned_to = db.Column(db.String(80), nullable=True, index=True) # <-- NUOVO CAMPO
 
     def __repr__(self):
         status = "Completato" if self.is_completed else "Da fare"
         creator = self.created_by or "Sconosciuto"
-        return f'<Todo {self.id} [{status}] - By: {creator}>'
+        assignee = f" -> {self.assigned_to}" if self.assigned_to else ""
+        return f'<Todo {self.id} [{status}] - By: {creator}{assignee}>'
 
 # --- Modello DB PushSubscription (OK) ---
 class PushSubscription(db.Model):
@@ -1839,46 +1840,53 @@ def todo_list():
         flash("Errore nel caricamento delle cose da fare.", "danger")
         incomplete_tasks = []
         completed_tasks = []
+    
+    assignable_users = sorted(list(users_db.keys()))
 
     return render_template('todo.html',
                            incomplete_tasks=incomplete_tasks,
                            completed_tasks=completed_tasks,
+                           assignable_users=assignable_users,
                            active_page='todo')
 
 @app.route('/todo/add', methods=['POST'])
 @login_required
 def add_todo():
-    """Aggiunge una nuova task CONDIVISA."""
+    """Aggiunge una nuova task CONDIVISA, assegnandola opzionalmente a un utente."""
     description = request.form.get('description', '').strip()
-    creator_id = current_user.id # Salva chi l'ha creata
+    assigned_user = request.form.get('assign_to') # <-- LEGGI UTENTE ASSEGNATO DAL FORM
+    creator_id = current_user.id
+
+    # Rimuovi valore vuoto se "Nessuno" è selezionato
+    if assigned_user == "":
+        assigned_user = None
 
     if not description:
         flash("La descrizione non può essere vuota.", "warning")
     else:
         try:
-            # Crea task senza user_id, ma con created_by
-            new_task = TodoItem(created_by=creator_id, description=description)
+            # Crea task con created_by e assigned_to
+            new_task = TodoItem(created_by=creator_id,
+                                description=description,
+                                assigned_to=assigned_user) # <-- SALVA UTENTE ASSEGNATO
             db.session.add(new_task)
-            print(f"DEBUG [add_todo]: Tentativo commit nuova task CONDIVISA da {creator_id}: '{description}'")
+            print(f"DEBUG [add_todo]: Tentativo commit task CONDIVISA da {creator_id} per '{assigned_user or 'Nessuno'}': '{description}'")
             db.session.commit()
             print(f"DEBUG [add_todo]: Commit Riuscito.")
-            flash("Nuova cosa da fare aggiunta alla lista condivisa!", "success")
+            flash(f"Nuova cosa da fare aggiunta{(' e assegnata a ' + assigned_user) if assigned_user else ''}!", "success")
 
-            # --- Invia notifica (a chi? Forse a tutti gli admin/preparatori?) ---
-            # Potresti modificare send_push_notification per inviare a un gruppo
-            # Per ora, invia solo a chi l'ha creata (come prima)
+            # --- Invio notifica (OPZIONALE: anche all'utente assegnato?) ---
+            # ... (codice notifica esistente a creator_id) ...
             try:
                 description_short = (description[:40] + '...') if len(description) > 40 else description
-                notification_title = "Nuova Cosa da Fare (Condivisa)"; notification_body = f"Aggiunto: '{description_short}'"
-                print(f"Tentativo invio notifica ToDo a {creator_id}")
-                send_push_notification(creator_id, notification_title, notification_body)
-                # QUI POTRESTI AGGIUNGERE UN CICLO PER INVIARE AD ALTRI UTENTI SE NECESSARIO
-                admin_users = [user for user, data in users_db.items() if 'admin' in data.get('roles', [])]
-                for admin in admin_users:
-                    if admin != creator_id: # Non inviare di nuovo a chi l'ha creata
-                        send_push_notification(admin, f"Nuova Task da {creator_id}", f"Aggiunto: '{description_short}'")
+                # Notifica a chi l'ha creata
+                send_push_notification(creator_id, "Nuova Task Aggiunta", f"Hai aggiunto: '{description_short}'")
+                # Notifica a chi è stata assegnata (se diverso da chi l'ha creata)
+                if assigned_user and assigned_user != creator_id:
+                    print(f"Tentativo invio notifica assegnazione a {assigned_user}")
+                    send_push_notification(assigned_user, "Nuova Task Assegnata", f"Ti è stata assegnata: '{description_short}' da {creator_id}")
             except Exception as notify_err: print(f"ERRORE [add_todo]: Fallito invio notifica push: {notify_err}")
-            # --- Fine Invio Notifica ---
+            # --- FINE Invio Notifica ---
 
         except Exception as e:
             db.session.rollback()

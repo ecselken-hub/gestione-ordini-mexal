@@ -1,21 +1,33 @@
 {% extends "base.html" %}
 
-{% block title %}Cose da Fare{% endblock %}
+{% block title %}Cose da Fare (Condivisa){% endblock %}
 
 {% block content %}
 <div class="header">
-    <h1>Cose da Fare</h1>
-    {# Potresti aggiungere un contatore qui se vuoi #}
+    <h1>Cose da Fare (Condivisa)</h1>
 </div>
 
 {# Form per aggiungere nuove task #}
-<div class="card mb-4"> {# Aggiunto margine sotto #}
+<div class="card mb-4">
     <div class="card-body">
         <form action="{{ url_for('add_todo') }}" method="POST">
-            <div class="input-group">
-                <input type="text" name="description" class="form-control form-control-lg" placeholder="Nuova cosa da fare..." required>
-                <button class="btn btn-primary" type="submit">Aggiungi</button>
+            {# Input Descrizione #}
+            <div class="mb-3">
+                <label for="todo-description" class="form-label visually-hidden">Descrizione</label> {# Etichetta per accessibilità #}
+                <input type="text" id="todo-description" name="description" class="form-control form-control-lg" placeholder="Nuova cosa da fare..." required>
             </div>
+            {# --- NUOVO: Dropdown Assegnazione --- #}
+            <div class="mb-3">
+                <label for="assign-to-select" class="form-label" style="font-weight: 500;">Assegna a:</label>
+                <select name="assign_to" id="assign-to-select" class="form-select">
+                    <option value="">-- Nessuno --</option> {# Opzione default #}
+                    {% for user in assignable_users %}
+                        <option value="{{ user }}">{{ user }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {# --- FINE NUOVO DROPDOWN --- #}
+            <button class="btn btn-primary w-100" type="submit">Aggiungi Task</button>
         </form>
     </div>
 </div>
@@ -30,25 +42,27 @@
                 <div class="task-details">
                     <span class="task-description">{{ task.description }}</span>
                     <small class="text-muted d-block creation-time">
-                        Aggiunto: {{ task.created_at.strftime('%d/%m/%Y %H:%M') if task.created_at else 'N/D' }}
+                        Aggiunto da: <strong>{{ task.created_by or '?' }}</strong> il {{ task.created_at.strftime('%d/%m %H:%M') if task.created_at else 'N/D' }}
+                        {# --- NUOVO: Mostra Assegnatario --- #}
+                        {% if task.assigned_to %}
+                            <br>Assegnato a: <strong class="text-primary">{{ task.assigned_to }}</strong>
+                        {% endif %}
+                        {# --- FINE NUOVO ASSEGNATARIO --- #}
                     </small>
                 </div>
-                {# Form per completare la task #}
+                {# Bottone Completa (invariato) #}
+                {% if current_user.has_role('admin') or current_user.has_role('preparatore') %}
                 <form action="{{ url_for('toggle_todo', item_id=task.id) }}" method="POST" class="ms-2">
                     <button type="submit" class="btn btn-sm btn-outline-success" title="Marca come completato">
-                        {# Icona Check SVG #}
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-lg" viewBox="0 0 16 16">
-                          <path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425a.247.247 0 0 1 .02-.022Z"/>
-                        </svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-lg" viewBox="0 0 16 16"><path d="M12.736 3.97a.733.733 0 0 1 1.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 0 1-1.065.02L3.217 8.384a.757.757 0 0 1 0-1.06.733.733 0 0 1 1.047 0l3.052 3.093 5.4-6.425a.247.247 0 0 1 .02-.022Z"/></svg>
                     </button>
                 </form>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>
     {% else %}
-        <div class="card-body text-center text-muted">
-            Nessuna cosa da fare... per ora!
-        </div>
+        <div class="card-body text-center text-muted">Nessuna cosa da fare... per ora!</div>
     {% endif %}
 </div>
 
@@ -60,42 +74,31 @@
             {% for task in completed_tasks %}
              <li class="list-group-item d-flex justify-content-between align-items-center">
                 <div class="task-details">
-                    {# Descrizione barrata #}
                     <span class="task-description completed-text">{{ task.description }}</span>
                     <small class="text-muted d-block completion-time">
-                        Completato: {{ task.completed_at.strftime('%d/%m/%Y %H:%M') if task.completed_at else 'N/D' }}
-                        {# Mostra anche creazione? (Aggiunto) #}
-                        (Aggiunto: {{ task.created_at.strftime('%d/%m/%Y %H:%M') if task.created_at else 'N/D' }})
+                        Completato da: <strong>{{ task.completed_by or '?' }}</strong> il {{ task.completed_at.strftime('%d/%m %H:%M') if task.completed_at else 'N/D' }}
+                        (Aggiunto da: {{ task.created_by or '?' }})
+                        {# --- NUOVO: Mostra Assegnatario (anche se completato) --- #}
+                        {% if task.assigned_to %}
+                            <br>Era assegnato a: <strong class="text-secondary">{{ task.assigned_to }}</strong>
+                        {% endif %}
+                        {# --- FINE NUOVO ASSEGNATARIO --- #}
                     </small>
                 </div>
-                <div class="task-actions d-flex gap-1"> {# Contenitore azioni #}
-                    {# Form per riaprire la task #}
-                    <form action="{{ url_for('toggle_todo', item_id=task.id) }}" method="POST">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary" title="Riapri">
-                            {# Icona Undo SVG #}
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-counterclockwise" viewBox="0 0 16 16">
-                              <path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/>
-                              <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/>
-                            </svg>
-                        </button>
-                    </form>
-                     {# Form per eliminare la task #}
-                    <form action="{{ url_for('delete_todo', item_id=task.id) }}" method="POST" onsubmit="return confirm('Sei sicuro di voler eliminare questa task completata?');">
-                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Elimina definitivamente">
-                            {# Icona Cestino SVG #}
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3" viewBox="0 0 16 16">
-                              <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5ZM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H2.506a.58.58 0 0 0-.01 0H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1h-.995a.59.59 0 0 0-.01 0H11Zm-6.465 1.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5ZM4.5 5.029l.5 8.5a.5.5 0 1 1-.998.06l-.5-8.5a.5.5 0 1 1 .998-.06Zm6.53-.528a.5.5 0 0 0-.528.47l-.5 8.5a.5.5 0 0 0 .998.058l.5-8.5a.5.5 0 0 0-.47-.528ZM8 4.5a.5.5 0 0 0-.5.5v8.5a.5.5 0 0 0 1 0V5a.5.5 0 0 0-.5-.5Z"/>
-                            </svg>
-                        </button>
-                    </form>
+                {# Bottoni Riapri/Elimina (invariati) #}
+                <div class="task-actions d-flex gap-1">
+                    {% if current_user.has_role('admin') or current_user.has_role('preparatore') %}
+                    <form action="{{ url_for('toggle_todo', item_id=task.id) }}" method="POST"> <button type="submit" class="btn btn-sm btn-outline-secondary" title="Riapri"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-counterclockwise" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466z"/></svg></button> </form>
+                    {% endif %}
+                    {% if current_user.has_role('admin') %}
+                    <form action="{{ url_for('delete_todo', item_id=task.id) }}" method="POST" onsubmit="return confirm('Eliminare definitivamente?');"> <button type="submit" class="btn btn-sm btn-outline-danger" title="Elimina"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-trash3" viewBox="0 0 16 16"><path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5ZM11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H2.506a.58.58 0 0 0-.01 0H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1h-.995a.59.59 0 0 0-.01 0H11Zm-6.465 1.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5ZM4.5 5.029l.5 8.5a.5.5 0 1 1-.998.06l-.5-8.5a.5.5 0 1 1 .998-.06Zm6.53-.528a.5.5 0 0 0-.528.47l-.5 8.5a.5.5 0 0 0 .998.058l.5-8.5a.5.5 0 0 0-.47-.528ZM8 4.5a.5.5 0 0 0-.5.5v8.5a.5.5 0 0 0 1 0V5a.5.5 0 0 0-.5-.5Z"/></svg></button> </form>
+                    {% endif %}
                 </div>
-            </li>
+             </li>
             {% endfor %}
         </ul>
      {% else %}
-        <div class="card-body text-center text-muted">
-            Nessuna cosa completata.
-        </div>
+        <div class="card-body text-center text-muted">Nessuna cosa completata.</div>
      {% endif %}
 </div>
 
@@ -133,6 +136,16 @@
      opacity: 1; /* Mostra bottoni su hover */
 }
 .input-group .form-control { flex-grow: 1; } /* Assicura che input occupi spazio */
+
+.form-select {
+    display: block; width: 100%; padding: .375rem 2.25rem .375rem .75rem;
+    font-size: 1rem; font-weight: 400; line-height: 1.5;
+    color: #212529; background-color: #fff;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
+    background-repeat: no-repeat; background-position: right .75rem center; background-size: 16px 12px;
+    border: 1px solid #ced4da; border-radius: .25rem;
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+}
 </style>
 
 {% endblock %}

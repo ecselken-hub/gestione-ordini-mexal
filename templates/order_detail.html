@@ -8,7 +8,7 @@
         <h1 style="font-size: 2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
         <p style="color: var(--secondary-text-color); margin: 0; font-weight: 500;">{{ order.ragione_sociale }}</p>
     </div>
-    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a> {# Mantenuto bottone standard #}
+    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a> 
 </div>
 
 {# Mantenute card Dati Cliente e Stato Picking semplici #}
@@ -16,9 +16,7 @@
     <div class="card-header">Dati Cliente</div>
     <div class="card-body">
         <p><strong>Località:</strong> {{ order.localita_effettiva }}</p>
-        {% if order.telefono %}<p><strong>Telefono:</strong> {{ order.telefono }}</p>{% endif %}
         {% if order.nota %}<p><strong>Note Ordine:</strong> {{ order.nota }}</p>{% endif %}
-        {% if order.pagamento_desc %}<p><strong>Pagamento:</strong> {{ order.pagamento_desc }}</p>{% endif %}
     </div>
 </div>
 
@@ -42,7 +40,6 @@
 <div class="card">
     <div class="card-header">Articoli da Preparare</div>
 
-    {# Scanner Barcode - Mantenuto ma con stile più semplice #}
     {% if state.status == 'In Picking' %}
     <div class="card-body" style="background-color: #f8f9fa; padding: 1rem; border-bottom: 1px solid #dee2e6;">
         <label for="barcode-scanner" style="font-weight: 500; margin-bottom: 0.5rem; display: block;">Scanner Barcode</label>
@@ -64,9 +61,8 @@
                     {# Prova a convertire quantita in numero #}
                     {% set quantita_val = (item.quantita | string | replace(',', '.') | float) if item.quantita is defined and item.quantita is not none and item.quantita != '' else 0.0 %}
 
-                    {# Se nr_colli è valido e > 0, usa quello come qta_ordinata #}
                     {% if nr_colli_val > 0 %}
-                        {% set qta_ordinata = nr_colli_val %}
+                        {% set qta_ordinata = nr_colli_val * quantita_val %}
                     {# Altrimenti, usa quantita_val #}
                     {% else %}
                         {% set qta_ordinata = quantita_val %}
@@ -75,7 +71,6 @@
                     {% set qta_prelevata = (state.picked_items.get(row_id, '0') | string | replace(',', '.') | float) if state.picked_items else 0.0 %}
                     {% set is_complete = (qta_prelevata >= qta_ordinata and qta_ordinata > 0) %}
                     
-                {# Struttura DIV simile all'immagine 'prima' #}
                 <div class="article-row {% if is_complete %}picked-complete-simple{% endif %}" id="order-row-{{ row_id }}">
                     <div class="article-info">
                         <p class="article-description">{{ item.descr_articolo or 'N/D' }}</p>
@@ -90,11 +85,11 @@
                                 {{ qta_ordinata | int }} <span style="font-size: 0.8em; color: #6c757d;">Ordinati</span>
                              {% endif %}
                         </span>
-                         {# Dettaglio Colli se presente #}
-                         {% if item.nr_colli and item.nr_colli > 0 and qta_ordinata > 0 %}
-                            {% set pezzi_per_collo = (qta_ordinata / item.nr_colli) %}
-                            <small class="d-block text-muted">{{ item.nr_colli | int }} x {{ pezzi_per_collo | int if pezzi_per_collo is integer else "%.2f"|format(pezzi_per_collo) }}</small>
-                         {% endif %}
+                        {# Dettaglio Colli se presente #}
+                        {% if nr_colli_val > 0 and quantita_val > 0 %}
+                           <small class="d-block text-muted">{{ nr_colli_val | int }} x {{ quantita_val | int if (quantita_val * 100) % 100 == 0 else "%.2f"|format(quantita_val) }} pz</small>
+                        {% elif quantita_val > 0 %}
+                        {% endif %}
                     </div>
                 </div>
                 {% endfor %}
@@ -116,13 +111,12 @@
                 <button type="submit" name="action" value="complete_picking" class="btn btn-success btn-lg w-100" style="background-color: #34A853; border-color: #34A853;">Completa Picking e Invia a Controllo</button> {# Colore verde simile #}
             {% elif state.status == 'In Controllo' %}
                  <p class="fs-5 mb-3"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore or 'N/D' }}</strong></p>
-                 <div class="d-flex gap-2 justify-content-center"> {# Bottoni affiancati #}
+                 <div class="d-flex gap-2 justify-content-center"> 
                      <button type="submit" name="action" value="approve_order" class="btn btn-success btn-lg">Approva Ordine</button>
                      <button type="submit" name="action" value="reject_order" class="btn btn-danger btn-lg">Rimanda al Picking</button>
                  </div>
             {% elif state.status == 'Completato' %}
                  <div class="alert alert-success d-flex align-items-center mb-0" role="alert">
-                     {# ... icona successo ... #}
                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-check-circle-fill flex-shrink-0 me-2" viewBox="0 0 16 16" role="img" aria-label="Success:">
                          <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
                      </svg>
@@ -196,7 +190,7 @@
      /* Rimosso bordo sinistro per semplicità */
 }
 .picked-complete-simple .article-description {
-     /* text-decoration: line-through; /* Opzionale: barra nome */
+     text-decoration: line-through; /* Opzionale: barra nome */
 }
 
 /* Feedback Scanner */
@@ -362,7 +356,7 @@ document.addEventListener('DOMContentLoaded', function() {
              // Aggiorna solo la quantità prelevata
             pickedQtySpan.textContent = Math.round(pickedQty);
             // La quantità ordinata non dovrebbe cambiare
-            // orderedQtySpan.textContent = Math.round(orderedQty);
+            orderedQtySpan.textContent = Math.round(orderedQty);
         }
 
         // Aggiorna stile riga e badge quantità
