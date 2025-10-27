@@ -98,6 +98,29 @@
             background-color: rgba(220, 53, 69, 0.1); /* Sfondo rosso leggero */
         }
 
+        .notify-button {
+            position: absolute; /* O 'fixed' se vuoi che resti fisso allo scroll */
+            top: 15px; /* Distanza dall'alto */
+            right: 105px; /* Distanza da destra */
+            display: inline-block;
+            padding: 0.4rem 0.6rem; /* Padding ridotto */
+            font-size: 1.2rem; /* Dimensione icona X */
+            font-weight: bold;
+            line-height: 1;
+            color: var(--secondary-text-color); /* Colore grigio */
+            background-color: transparent;
+            border: none; /* Rimuovi bordo se presente di default */
+            border-radius: 50%; /* Cerchio */
+            text-decoration: none;
+            cursor: pointer;
+            z-index: 1010; /* Sopra la tab bar se usi fixed */
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        .notify-button:hover {
+            color: var(--danger-color); /* Rosso al passaggio del mouse */
+            background-color: rgba(220, 53, 69, 0.1); /* Sfondo rosso leggero */
+        }
+
         .refresh-button {
             position: absolute; /* O fixed */
             top: 15px;
@@ -137,7 +160,12 @@
         &times; {# Simbolo HTML per la X #}
     </a>
     {% endif %}
-    {# --- FINE NUOVO POSIZIONAMENTO --- #}
+
+    {% if current_user.is_authenticated %}
+    <a class="notify-button" title="Notifiche" onclick="askForNotificationPermission()">
+        &hearts; {# Simbolo HTML per la X #}
+    </a>
+    {% endif %}
 
     {% if current_user.is_authenticated %}
     <button id="manual-refresh-btn" class="refresh-button" title="Aggiorna Ordini" onclick="manualCheckUpdates();">
