@@ -12,6 +12,7 @@ import googlemaps
 from datetime import datetime, timedelta
 from collections import OrderedDict, defaultdict
 import math
+import io
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField
@@ -21,11 +22,14 @@ import json
 from flask_sqlalchemy import SQLAlchemy
 from pywebpush import webpush, WebPushException
 import threading 
+import dropbox
+from weasyprint import HTML
 
 # Carica variabili d'ambiente da .env (se esiste)
 load_dotenv()
 
 app = Flask(__name__)
+
 
 # --- CORREZIONE 7: Raccomandazione per SECRET_KEY ---
 # NOTA: Per produzione, sposta SECRET_KEY in una variabile d'ambiente!
@@ -1377,6 +1381,38 @@ def order_detail_view(sigla, serie, numero):
                            order=order_copy,
                            state=order_state) # Contiene state['packing_list']
 
+DROPBOX_TOKEN = os.getenv('DROPBOX_ACCESS_TOKEN')
+
+def _upload_to_dropbox(file_content_bytes, file_name):
+    """Carica un file (come bytes) su Dropbox."""
+    
+    if not DROPBOX_TOKEN:
+        print("ERRORE [DROPBOX]: DROPBOX_ACCESS_TOKEN non impostato in .env")
+        return False, "Token Dropbox non configurato"
+        
+    # Il percorso in Dropbox (es. /file.pdf)
+    dropbox_path = f"/{file_name}" 
+    
+    try:
+        # Inizializza il client
+        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+        
+        # Esegui l'upload, passando i bytes direttamente
+        dbx.files_upload(
+            file_content_bytes, # <--- Passa i bytes del PDF
+            dropbox_path,
+            mode=dropbox.files.WriteMode('overwrite') # 'overwrite' è più sicuro
+        )
+        
+        print(f"SUCCESS [DROPBOX]: File {file_name} caricato.")
+        return True, file_name
+        
+    except dropbox.exceptions.AuthError as e:
+        print(f"ERRORE CRITICO [DROPBOX] Auth: {e}")
+        return False, "Errore autenticazione Dropbox (Token errato o permessi?)"
+    except Exception as e:
+        print(f"ERRORE CRITICO [DROPBOX] Upload: {e}")
+        return False, str(e)
 
 # --- Azioni Ordine (con Lock e Notifica) ---
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
@@ -1475,63 +1511,121 @@ def order_action(sigla, serie, numero):
 
     # --- NUOVA LOGICA: Salvataggio File TXT Dettagliato (Goal 2) ---
     if picking_data_to_save:
+        pdf_bytes = None
+        filename = None
         try:
-            output_folder = os.path.join(app.root_path, 'picking_lists_locali')
-            os.makedirs(output_folder, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.txt"
-            filepath = os.path.join(output_folder, filename)
-
-            print(f"DEBUG [complete_picking]: Tentativo salvataggio PACKING LIST DETTAGLIATA in: {filepath}")
-
-            # Crea una mappa {codice_articolo: descrizione} per un lookup veloce
+            # --- 1. Genera la mappa delle descrizioni (invariato) ---
             desc_map = {
                 item.get('codice_articolo'): item.get('descr_articolo', 'N/D')
                 for item in picking_data_to_save['order_rows']
             }
 
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(f"--- PACKING LIST (Locale) ---\n")
-                f.write(f"Ordine: {picking_data_to_save['order_key']}\n")
-                f.write(f"Cliente: {picking_data_to_save['cliente']}\n")
-                f.write(f"Data Picking: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
-                f.write(f"Operatore: {picking_data_to_save['operatore']}\n")
-                f.write(f"COLLI TOTALI DICHIARATI: {picking_data_to_save['colli_totali_dichiarati']}\n")
-                f.write("=" * 40 + "\n\n")
+            # --- 2. Definisci il nome del file (ora .pdf) ---
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.pdf"
 
-                riepilogo_totale_articoli = defaultdict(float)
-                packing_list_ordinata = sorted(picking_data_to_save['packing_list_dettagliata'], key=lambda c: c['collo_id'])
-
-                # 1. Scrivi dettaglio per collo (Goal 1)
-                for collo in packing_list_ordinata:
-                    collo_id = collo.get('collo_id')
-                    items_in_collo = collo.get('items', {})
-                    f.write(f"--- COLLO {collo_id} ---\n")
-                    if not items_in_collo:
-                        f.write("(Vuoto)\n")
-                    else:
-                        for codice_art, qta in items_in_collo.items():
-                            f.write(f"  {int(qta)} x [{codice_art}] {desc_map.get(codice_art, 'N/D')}\n")
-                            riepilogo_totale_articoli[codice_art] += qta
-                    f.write("\n")
+            # --- 3. Genera il contenuto HTML come stringa ---
+            
+            # Prepara blocchi HTML per i colli
+            riepilogo_totale_articoli = defaultdict(float)
+            packing_list_ordinata = sorted(picking_data_to_save['packing_list_dettagliata'], key=lambda c: c['collo_id'])
+            
+            colli_html_blocks = []
+            for collo in packing_list_ordinata:
+                collo_id = collo.get('collo_id')
+                items_in_collo = collo.get('items', {})
                 
-                # 2. Scrivi riepilogo totale articoli
-                f.write("=" * 40 + "\n")
-                f.write("RIEPILOGO ARTICOLI TOTALI PRELEVATI:\n\n")
-                if not riepilogo_totale_articoli:
-                    f.write("Nessun articolo prelevato.\n")
+                colli_html_blocks.append(f"<h3>--- COLLO {collo_id} ---</h3>")
+                if not items_in_collo:
+                    colli_html_blocks.append("<p>(Vuoto)</p>")
                 else:
-                    for codice_art, qta_totale in sorted(riepilogo_totale_articoli.items()):
-                         f.write(f"  {int(qta_totale)} x [{codice_art}] {desc_map.get(codice_art, 'N/D')}\n")
+                    items_list_html = []
+                    # Ordina gli articoli nel collo per codice
+                    for codice_art, qta in sorted(items_in_collo.items()):
+                        desc = desc_map.get(codice_art, 'N/D')
+                        items_list_html.append(f"<li><strong>{int(qta)} x</strong> [{codice_art}] {desc}</li>")
+                        riepilogo_totale_articoli[codice_art] += qta
+                    colli_html_blocks.append(f"<ul>{''.join(items_list_html)}</ul>")
 
-            print(f"DEBUG [complete_picking]: File packing list salvato con successo.")
-            flash(f"Packing list salvata ({filename}). In attesa di controllo.", "success")
+            # Prepara blocco HTML per il riepilogo
+            riepilogo_html_blocks = ["<h3>RIEPILOGO ARTICOLI TOTALI PRELEVATI</h3>"]
+            if not riepilogo_totale_articoli:
+                riepilogo_html_blocks.append("<p>Nessun articolo prelevato.</p>")
+            else:
+                items_list_html = []
+                for codice_art, qta_totale in sorted(riepilogo_totale_articoli.items()):
+                     desc = desc_map.get(codice_art, 'N/D')
+                     items_list_html.append(f"<li><strong>{int(qta_totale)} x</strong> [{codice_art}] {desc}</li>")
+                riepilogo_html_blocks.append(f"<ul>{''.join(items_list_html)}</ul>")
+            
+            # --- 4. Assembla l'HTML finale ---
+            html_string = f"""
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: sans-serif; font-size: 8px; line-height: 1.4; }}
+                    h1 {{ font-size: 20px; text-align: center; background-color: #f4f4f4; padding: 10px; margin-bottom: 15px; }}
+                    h3 {{ font-size: 10px; border-bottom: 1px solid #ccc; margin-top: 5px; }}
+                    ul {{ list-style-type: none; padding-left: 10px; margin-top: 5px; }}
+                    li {{ margin-bottom: 4px; }}
+                    .header-info p {{ margin: 2px 0; font-size: 11px; }}
+                    .summary {{ margin-top: 20px; border-top: 2px solid #000; padding-top: 10px; }}
+                    strong {{ font-weight: bold; }}
+                </style>
+            </head>
+            <body>
+                <h1>PACKING LIST</h1>
+                <div class="header-info">
+                    <p><strong>Ordine:</strong> {picking_data_to_save['order_key']}</p>
+                    <p><strong>Cliente:</strong> {picking_data_to_save['cliente']}</p>
+                    <p><strong>Data Picking:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+                    <p><strong>Operatore:</strong> {picking_data_to_save['operatore']}</p>
+                    <p><strong>COLLI TOTALI DICHIARATI:</strong> {picking_data_to_save['colli_totali_dichiarati']}</p>
+                </div>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
+                
+                {''.join(colli_html_blocks)}
+                
+                <div class="summary">
+                    {''.join(riepilogo_html_blocks)}
+                </div>
+            </body>
+            </html>
+            """
+            
+            # --- 5. Converti HTML in PDF (bytes) ---
+            print(f"DEBUG [complete_picking]: Generazione PDF per {filename}...")
+            pdf_bytes = HTML(string=html_string).write_pdf()
+            print(f"DEBUG [complete_picking]: PDF generato ({len(pdf_bytes)} bytes).")
 
-        except Exception as e:
-            print(f"ERRORE CRITICO [complete_picking]: Fallito salvataggio file .txt: {e}")
+            # --- 6. Tenta Upload su Dropbox ---
+            upload_success, upload_message = _upload_to_dropbox(pdf_bytes, filename)
+            
+            if upload_success:
+                flash(f"Packing list PDF salvata su Dropbox ({filename}). In attesa di controllo.", "success")
+            else:
+                flash(f"ATTENZIONE: Fallito upload PDF su Dropbox ({upload_message}).", "danger")
+
+        except Exception as e_gen:
+            print(f"ERRORE CRITICO [complete_picking]: {e_gen}")
             import traceback; traceback.print_exc()
-            flash("Picking completato, MA fallito salvataggio file .txt locale.", "danger")
-    # --- FINE SALVATAGGIO FILE ---
+            flash("Picking completato, MA fallito generazione/upload del PDF.", "danger")
+
+        # --- 7. Salva localmente (come bytes) ---
+        if pdf_bytes and filename:
+            try:
+                output_folder = os.path.join(app.root_path, 'picking_lists_locali')
+                os.makedirs(output_folder, exist_ok=True)
+                filepath = os.path.join(output_folder, filename)
+                with open(filepath, 'wb') as f_local: # <-- 'wb' per write bytes
+                    f_local.write(pdf_bytes) # <-- Scrivi i bytes
+                print(f"DEBUG [complete_picking]: Backup PDF locale salvato in: {filepath}")
+                flash("File PDF salvato anche localmente come backup.", "info")
+            except Exception as e_local:
+                print(f"ERRORE CRITICO [complete_picking]: Fallito salvataggio backup PDF locale: {e_local}")
+                flash("Fallito ANCHE salvataggio backup PDF locale!", "danger")
 
 
     # --- Invio notifica (se 'approve_order' - invariato) ---
@@ -1548,10 +1642,6 @@ def order_action(sigla, serie, numero):
             flash("Ordine approvato, ma errore invio notifica.", "warning")
 
     return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
-
-
-# --- RIMOZIONE PDF: Funzione stampa_lista_prelievo rimossa ---
-
 
 @app.route('/magazzino')
 @login_required
