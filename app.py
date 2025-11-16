@@ -23,7 +23,7 @@ from flask_sqlalchemy import SQLAlchemy
 from pywebpush import webpush, WebPushException
 import threading 
 import dropbox
-from weasyprint import HTML
+from fpdf import FPDF
 
 # Carica variabili d'ambiente da .env (se esiste)
 load_dotenv()
@@ -1510,6 +1510,7 @@ def order_action(sigla, serie, numero):
     # --- FINE Blocco 'with app_data_store_lock' ---
 
     # --- NUOVA LOGICA: Salvataggio File TXT Dettagliato (Goal 2) ---
+# --- NUOVA LOGICA: Genera PDF con FPDF2 (puro Python) e carica ---
     if picking_data_to_save:
         pdf_bytes = None
         filename = None
@@ -1520,87 +1521,73 @@ def order_action(sigla, serie, numero):
                 for item in picking_data_to_save['order_rows']
             }
 
-            # --- 2. Definisci il nome del file (ora .pdf) ---
+            # --- 2. Definisci il nome del file (invariato) ---
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.pdf"
 
-            # --- 3. Genera il contenuto HTML come stringa ---
+            # --- 3. Genera il PDF con FPDF2 ---
+            print(f"DEBUG [complete_picking]: Generazione PDF (fpdf2) per {filename}...")
             
-            # Prepara blocchi HTML per i colli
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            
+            # Titolo
+            pdf.set_font("Arial", "B", 18)
+            pdf.cell(0, 12, "PACKING LIST", border=0, ln=1, align="C")
+            pdf.ln(5)
+
+            # Info Header
+            pdf.set_font("Arial", size=11)
+            pdf.cell(0, 7, f"Ordine: {picking_data_to_save['order_key']}", ln=1)
+            pdf.cell(0, 7, f"Cliente: {picking_data_to_save['cliente']}", ln=1)
+            pdf.cell(0, 7, f"Operatore: {picking_data_to_save['operatore']}", ln=1)
+            pdf.set_font("Arial", "B", 11)
+            pdf.cell(0, 7, f"COLLI TOTALI DICHIARATI: {picking_data_to_save['colli_totali_dichiarati']}", ln=1)
+            pdf.ln(7)
+
             riepilogo_totale_articoli = defaultdict(float)
             packing_list_ordinata = sorted(picking_data_to_save['packing_list_dettagliata'], key=lambda c: c['collo_id'])
-            
-            colli_html_blocks = []
+
+            # 4. Scrivi dettaglio per collo
             for collo in packing_list_ordinata:
                 collo_id = collo.get('collo_id')
                 items_in_collo = collo.get('items', {})
                 
-                colli_html_blocks.append(f"<h3>--- COLLO {collo_id} ---</h3>")
+                pdf.set_font("Arial", "B", 13)
+                pdf.cell(0, 10, f"--- COLLO {collo_id} ---", border="B", ln=1) # Bordo inferiore
+                pdf.set_font("Arial", size=10)
+                
                 if not items_in_collo:
-                    colli_html_blocks.append("<p>(Vuoto)</p>")
+                    pdf.cell(0, 7, "(Vuoto)", ln=1)
                 else:
-                    items_list_html = []
-                    # Ordina gli articoli nel collo per codice
                     for codice_art, qta in sorted(items_in_collo.items()):
                         desc = desc_map.get(codice_art, 'N/D')
-                        items_list_html.append(f"<li><strong>{int(qta)} x</strong> [{codice_art}] {desc}</li>")
+                        linea = f"{int(qta)} x [{codice_art}] {desc}"
+                        pdf.multi_cell(0, 7, linea) # multi_cell per testo a capo
                         riepilogo_totale_articoli[codice_art] += qta
-                    colli_html_blocks.append(f"<ul>{''.join(items_list_html)}</ul>")
+                pdf.ln(4)
 
-            # Prepara blocco HTML per il riepilogo
-            riepilogo_html_blocks = ["<h3>RIEPILOGO ARTICOLI TOTALI PRELEVATI</h3>"]
+            # 5. Scrivi riepilogo totale articoli
+            pdf.ln(5)
+            pdf.set_font("Arial", "B", 13)
+            pdf.cell(0, 10, "RIEPILOGO ARTICOLI TOTALI PRELEVATI", border="T", ln=1) # Bordo superiore
+            pdf.set_font("Arial", size=10)
+            
             if not riepilogo_totale_articoli:
-                riepilogo_html_blocks.append("<p>Nessun articolo prelevato.</p>")
+                pdf.cell(0, 7, "Nessun articolo prelevato.", ln=1)
             else:
-                items_list_html = []
                 for codice_art, qta_totale in sorted(riepilogo_totale_articoli.items()):
                      desc = desc_map.get(codice_art, 'N/D')
-                     items_list_html.append(f"<li><strong>{int(qta_totale)} x</strong> [{codice_art}] {desc}</li>")
-                riepilogo_html_blocks.append(f"<ul>{''.join(items_list_html)}</ul>")
-            
-            # --- 4. Assembla l'HTML finale ---
-            html_string = f"""
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: sans-serif; font-size: 8px; line-height: 1.4; }}
-                    h1 {{ font-size: 20px; text-align: center; background-color: #f4f4f4; padding: 10px; margin-bottom: 15px; }}
-                    h3 {{ font-size: 10px; border-bottom: 1px solid #ccc; margin-top: 5px; }}
-                    ul {{ list-style-type: none; padding-left: 10px; margin-top: 5px; }}
-                    li {{ margin-bottom: 4px; }}
-                    .header-info p {{ margin: 2px 0; font-size: 11px; }}
-                    .summary {{ margin-top: 20px; border-top: 2px solid #000; padding-top: 10px; }}
-                    strong {{ font-weight: bold; }}
-                </style>
-            </head>
-            <body>
-                <h1>PACKING LIST</h1>
-                <div class="header-info">
-                    <p><strong>Ordine:</strong> {picking_data_to_save['order_key']}</p>
-                    <p><strong>Cliente:</strong> {picking_data_to_save['cliente']}</p>
-                    <p><strong>Data Picking:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
-                    <p><strong>Operatore:</strong> {picking_data_to_save['operatore']}</p>
-                    <p><strong>COLLI TOTALI DICHIARATI:</strong> {picking_data_to_save['colli_totali_dichiarati']}</p>
-                </div>
-                
-                <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;">
-                
-                {''.join(colli_html_blocks)}
-                
-                <div class="summary">
-                    {''.join(riepilogo_html_blocks)}
-                </div>
-            </body>
-            </html>
-            """
-            
-            # --- 5. Converti HTML in PDF (bytes) ---
-            print(f"DEBUG [complete_picking]: Generazione PDF per {filename}...")
-            pdf_bytes = HTML(string=html_string).write_pdf()
+                     linea = f"{int(qta_totale)} x [{codice_art}] {desc}"
+                     pdf.multi_cell(0, 7, linea)
+
+            # --- 6. Ottieni il PDF come bytes ---
+            # Nota: fpdf2 produce latin-1, che è ok per dbx.output(dest='S').encode('latin-1')
+            pdf_bytes = pdf.output(dest='S').encode('latin-1')
             print(f"DEBUG [complete_picking]: PDF generato ({len(pdf_bytes)} bytes).")
 
-            # --- 6. Tenta Upload su Dropbox ---
+            # --- 7. Tenta Upload su Dropbox (la tua funzione _upload_to_dropbox accetta già bytes) ---
             upload_success, upload_message = _upload_to_dropbox(pdf_bytes, filename)
             
             if upload_success:
@@ -1613,19 +1600,20 @@ def order_action(sigla, serie, numero):
             import traceback; traceback.print_exc()
             flash("Picking completato, MA fallito generazione/upload del PDF.", "danger")
 
-        # --- 7. Salva localmente (come bytes) ---
+        # --- 8. Salva localmente (come bytes) ---
         if pdf_bytes and filename:
             try:
                 output_folder = os.path.join(app.root_path, 'picking_lists_locali')
                 os.makedirs(output_folder, exist_ok=True)
                 filepath = os.path.join(output_folder, filename)
-                with open(filepath, 'wb') as f_local: # <-- 'wb' per write bytes
-                    f_local.write(pdf_bytes) # <-- Scrivi i bytes
+                with open(filepath, 'wb') as f_local: # 'wb' per write bytes
+                    f_local.write(pdf_bytes) # Scrivi i bytes
                 print(f"DEBUG [complete_picking]: Backup PDF locale salvato in: {filepath}")
                 flash("File PDF salvato anche localmente come backup.", "info")
             except Exception as e_local:
                 print(f"ERRORE CRITICO [complete_picking]: Fallito salvataggio backup PDF locale: {e_local}")
                 flash("Fallito ANCHE salvataggio backup PDF locale!", "danger")
+    # --- FINE SALVATAGGIO FILE ---
 
 
     # --- Invio notifica (se 'approve_order' - invariato) ---
