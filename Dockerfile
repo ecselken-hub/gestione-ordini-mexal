@@ -22,5 +22,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 5. Dici a Render quale comando eseguire per avviare il server
-# Usa la variabile $PORT fornita da Render
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT", "--workers", "4"]
