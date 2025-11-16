@@ -2,19 +2,18 @@
 # exit on error
 set -o errexit
 
-echo "Installing system dependencies for WeasyPrint..."
+echo "Installing system dependencies for WeasyPrint (with sudo)..."
 
-# Forza la pulizia delle liste apt bloccate
-echo "Cleaning up apt cache..."
-rm -rf /var/lib/apt/lists/*
-apt-get clean
+# Pulisci la cache (con sudo)
+echo "Cleaning apt cache (with sudo)..."
+sudo apt-get clean
 
-# Ora esegui l'update e l'installazione
-echo "Updating apt and installing dependencies..."
-apt-get update -y
-apt-get install -y libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libgobject-2.0-0
+# Aggiorna e installa (con sudo)
+echo "Updating apt and installing dependencies (with sudo)..."
+sudo apt-get update -y
+sudo apt-get install -y libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libgobject-2.0-0
 
-# Installa le tue librerie Python
+# I requisiti Python NON hanno bisogno di sudo
 echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
