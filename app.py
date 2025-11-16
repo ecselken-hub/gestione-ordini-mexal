@@ -278,8 +278,13 @@ app_data_store = {
     "last_load_time": None # Timestamp ultimo caricamento da API
 }
 def get_initial_status():
-    """Restituisce lo stato iniziale per un nuovo ordine."""
-    return {'status': 'Da Lavorare', 'picked_items': {}, 'colli_totali_operatore': 0}
+    """Restituisce lo stato iniziale per un nuovo ordine, inclusa la packing list."""
+    return {
+        'status': 'Da Lavorare',
+        'picked_items': {}, # Manteniamo per retrocompatibilità/riepilogo veloce
+        'colli_totali_operatore': 0,
+        'packing_list': [] # NUOVA STRUTTURA: Es. [{'collo_id': 1, 'items': {'ART001': 2, 'ART002': 1}}]
+    }
 
 # --- Funzione Caricamento Dati (con Lock e Error Handling) ---
 # --- CORREZIONE 4: Aggiunto commento su scalabilità ---
@@ -1323,138 +1328,224 @@ def amministrazione():
 @app.route('/order/<sigla>/<serie>/<numero>')
 @login_required
 def order_detail_view(sigla, serie, numero):
-    """Mostra i dettagli di un singolo ordine."""
+    """Mostra i dettagli dell'ordine, ora con la packing list."""
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        flash("Accesso non autorizzato al dettaglio ordine.", "danger")
+        flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     order_key = f"{sigla}:{serie}:{numero}"
     order_id = str(numero)
 
-    # Leggi ordine e stato sotto lock
     with app_data_store_lock:
         order_data = app_data_store.get("orders", {}).get(order_key)
+        
+        # Assicurati che lo stato esista e abbia le nuove chiavi
         if order_id not in app_data_store.get("statuses", {}):
             app_data_store.setdefault("statuses", {})[order_id] = get_initial_status()
-        # Crea una copia dello stato, assicurandoti che 'picked_items' sia un dict
-        order_state_orig = app_data_store.get("statuses", {}).get(order_id, get_initial_status())
+        
+        order_state_orig = app_data_store.get("statuses", {}).get(order_id)
         order_state = dict(order_state_orig) # Copia
-        if not isinstance(order_state.get('picked_items'), dict):
-             order_state['picked_items'] = {} # Inizializza se non è dict
+        
+        # Inizializza le nuove chiavi se mancano in uno stato vecchio
+        if 'picked_items' not in order_state: order_state['picked_items'] = {}
+        if 'packing_list' not in order_state: order_state['packing_list'] = []
 
     if not order_data:
-        # Prova a ricaricare i dati se l'ordine manca dalla cache
-        print(f"Ordine {order_key} non in cache, tentativo di ricaricamento...")
-        flash(f"Ordine {order_key} non trovato in cache, ricarico dati...", "info")
-        load_all_data() # Ricarica tutto
-        with app_data_store_lock: # Rileggi dopo ricaricamento
+        # ... (Logica ricaricamento dati se ordine non in cache - invariata) ...
+        print(f"Ordine {order_key} non in cache, ricarico...")
+        flash(f"Ordine {order_key} non trovato, ricarico dati...", "info")
+        load_all_data()
+        with app_data_store_lock: # Rileggi
              order_data = app_data_store.get("orders", {}).get(order_key)
-             if order_id in app_data_store.get("statuses", {}):
-                  order_state = dict(app_data_store["statuses"][order_id])
-             # else usa l'initial status già creato
-
+             order_state_orig = app_data_store.get("statuses", {}).get(order_id)
+             if order_state_orig:
+                 order_state = dict(order_state_orig)
+                 if 'picked_items' not in order_state: order_state['picked_items'] = {}
+                 if 'packing_list' not in order_state: order_state['packing_list'] = []
+             else: # Se ancora non esiste (es. ordine appena caricato)
+                 order_state = get_initial_status()
+                 app_data_store.setdefault("statuses", {})[order_id] = order_state
+        
         if not order_data:
-            flash(f"Errore: Impossibile trovare l'ordine {order_key}.", "danger")
-            return redirect(url_for('ordini_list'))
+             flash(f"Errore: Impossibile trovare l'ordine {order_key}.", "danger")
+             return redirect(url_for('ordini_list'))
 
-    # Crea una copia dell'ordine per sicurezza
     order_copy = dict(order_data)
 
+    # Passiamo sia l'ordine (per le righe totali) sia lo stato (per la packing_list)
     return render_template('order_detail.html',
                            order=order_copy,
-                           state=order_state) 
+                           state=order_state) # Contiene state['packing_list']
 
 
 # --- Azioni Ordine (con Lock e Notifica) ---
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
 @login_required
 def order_action(sigla, serie, numero):
-    """Gestisce le azioni sullo stato di un ordine (picking, controllo, approvazione)."""
+    """
+    Gestisce le azioni (Start, Complete, Approve, Reject).
+    'Complete' ora legge 'packing_list' dallo stato e genera il file TXT dettagliato.
+    """
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        flash("Accesso non autorizzato a modificare lo stato dell'ordine.", "danger")
-        return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
+        flash("Accesso non autorizzato.", "danger")
+        return redirect(url_for('dashboard'))
 
     action = request.form.get('action')
     order_id = str(numero)
     order_key = f"{sigla}:{serie}:{numero}"
-    order_name_notifica = f"#{order_id}" # Default per notifica
-    send_notification_flag = False # Flag per inviare notifica dopo il lock
+    order_name_notifica = f"#{order_id}"
+    send_notification_flag = False
+    
+    # Dati per salvataggio file (Goal 2)
+    picking_data_to_save = None
 
-    # Leggi e aggiorna stato sotto lock
     with app_data_store_lock:
         current_state = app_data_store.get("statuses", {}).get(order_id)
         if not current_state:
-            flash(f"Stato per l'ordine {order_id} non trovato.", "danger")
-            return redirect(url_for('ordini_list')) # O alla pagina ordine se esiste ancora
+            flash(f"Stato ordine {order_id} non trovato.", "danger")
+            return redirect(url_for('ordini_list'))
 
-        # Copia stato per confronto
         stato_precedente = current_state.get('status', 'Sconosciuto')
-
-        # Recupera nome cliente per notifica (se disponibile)
         order_info = app_data_store.get("orders", {}).get(order_key, {})
         if order_info:
             order_name_notifica = f"#{order_id} ({order_info.get('ragione_sociale', 'N/D')})"
 
-        # Applica l'azione
+        # --- Logica Azioni ---
         if action == 'start_picking':
-            if stato_precedente == 'Da Lavorare' or stato_precedente == 'In Controllo': # Permetti ripresa
+            if stato_precedente == 'Da Lavorare' or stato_precedente == 'In Controllo':
                 current_state['status'] = 'In Picking'
-                flash(f"Ordine {order_name_notifica} messo 'In Picking'.", "info")
+                # Resetta packing list E picked_items quando si (ri)inizia
+                current_state['packing_list'] = []
+                current_state['picked_items'] = {}
+                current_state['colli_totali_operatore'] = 0 # Resetta anche colli
+                flash(f"Ordine {order_name_notifica} messo 'In Picking'. Packing list resettata.", "info")
             else:
-                 flash(f"Azione 'In Picking' non permessa dallo stato '{stato_precedente}'.", "warning")
+                 flash(f"Azione 'In Picking' non permessa.", "warning")
+
         elif action == 'complete_picking':
             if stato_precedente == 'In Picking':
                 current_state['status'] = 'In Controllo'
-                picked_qty = {}
-                for key, val in request.form.items():
-                    if key.startswith('picked_qty_'):
-                         item_code = key.replace('picked_qty_', '')
-                         picked_qty[item_code] = val # Salva quantità come stringa per ora
-                colli_totali = request.form.get('colli_totali_operatore', '0')
+
+                # --- RIMOZIONE: Non leggiamo più 'picked_qty_{row_id}' ---
+                # Leggiamo solo i colli totali dichiarati (come controllo)
+                colli_totali_str = request.form.get('colli_totali_operatore', '0')
                 try:
-                    # Convalida colli totali come numero intero
-                    current_state['colli_totali_operatore'] = int(colli_totali) if colli_totali else 0
+                    colli_totali = int(colli_totali_str) if colli_totali_str else 0
+                    colli_totali = max(0, colli_totali)
                 except ValueError:
-                     current_state['colli_totali_operatore'] = 0 # Default a 0 se non valido
-                     flash("Numero colli non valido, impostato a 0.", "warning")
+                     colli_totali = 0
+                     flash("Numero colli non valido.", "warning")
 
-                current_state['picked_items'] = picked_qty
-                flash(f"Picking per {order_name_notifica} completato. In attesa di controllo.", "info")
+                # Salva i colli totali dichiarati
+                current_state['colli_totali_operatore'] = colli_totali
+
+                # Prepara i dati per il salvataggio file (Goal 2)
+                # Ora usiamo la 'packing_list' memorizzata nello stato
+                picking_data_to_save = {
+                    "order_key": order_key,
+                    "sigla": sigla, "serie": serie, "numero": numero,
+                    "cliente": order_info.get('ragione_sociale', 'N/D'),
+                    "operatore": current_user.id,
+                    "colli_totali_dichiarati": colli_totali,
+                    "packing_list_dettagliata": list(current_state.get('packing_list', [])), # Copia della lista
+                    "order_rows": list(order_info.get('righe', [])) # Copia delle righe per descrizioni
+                }
             else:
-                 flash(f"Azione 'Completa Picking' non permessa dallo stato '{stato_precedente}'.", "warning")
+                 flash(f"Azione 'Completa Picking' non permessa.", "warning")
+
         elif action == 'approve_order':
-            if stato_precedente == 'In Controllo':
+             if stato_precedente == 'In Controllo':
                 current_state['status'] = 'Completato'
-                flash(f"Ordine {order_name_notifica} approvato e completato.", "success")
-                send_notification_flag = True # Invia notifica dopo
-            else:
-                flash(f"Azione 'Approva Ordine' non permessa dallo stato '{stato_precedente}'.", "warning")
+                flash(f"Ordine {order_name_notifica} approvato.", "success")
+                send_notification_flag = True
+             else: flash(f"Azione 'Approva Ordine' non permessa.", "warning")
+
         elif action == 'reject_order':
-            if stato_precedente == 'In Controllo':
+             if stato_precedente == 'In Controllo':
                 current_state['status'] = 'In Picking' # Torna in picking
-                # Potresti voler resettare 'picked_items' o 'colli_totali' qui?
                 flash(f"Ordine {order_name_notifica} rifiutato. Riportato a 'In Picking'.", "warning")
-            else:
-                 flash(f"Azione 'Rifiuta Ordine' non permessa dallo stato '{stato_precedente}'.", "warning")
+             else: flash(f"Azione 'Rifiuta Ordine' non permessa.", "warning")
         else:
-             flash("Azione sullo stato ordine non riconosciuta.", "danger")
+             flash(f"Azione ('{action}') non riconosciuta.", "danger")
 
-        # Riassegna per sicurezza (anche se modifica per riferimento)
         app_data_store.setdefault("statuses", {})[order_id] = current_state
+        print(f"DEBUG [order_action]: Ordine {order_key}, Azione '{action}', Stato Post: '{current_state.get('status')}'")
 
-    # --- INVIO NOTIFICA (se approvato, fuori dal lock) ---
+    # --- FINE Blocco 'with app_data_store_lock' ---
+
+    # --- NUOVA LOGICA: Salvataggio File TXT Dettagliato (Goal 2) ---
+    if picking_data_to_save:
+        try:
+            output_folder = os.path.join(app.root_path, 'picking_lists_locali')
+            os.makedirs(output_folder, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.txt"
+            filepath = os.path.join(output_folder, filename)
+
+            print(f"DEBUG [complete_picking]: Tentativo salvataggio PACKING LIST DETTAGLIATA in: {filepath}")
+
+            # Crea una mappa {codice_articolo: descrizione} per un lookup veloce
+            desc_map = {
+                item.get('codice_articolo'): item.get('descr_articolo', 'N/D')
+                for item in picking_data_to_save['order_rows']
+            }
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(f"--- PACKING LIST (Locale) ---\n")
+                f.write(f"Ordine: {picking_data_to_save['order_key']}\n")
+                f.write(f"Cliente: {picking_data_to_save['cliente']}\n")
+                f.write(f"Data Picking: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+                f.write(f"Operatore: {picking_data_to_save['operatore']}\n")
+                f.write(f"COLLI TOTALI DICHIARATI: {picking_data_to_save['colli_totali_dichiarati']}\n")
+                f.write("=" * 40 + "\n\n")
+
+                riepilogo_totale_articoli = defaultdict(float)
+                packing_list_ordinata = sorted(picking_data_to_save['packing_list_dettagliata'], key=lambda c: c['collo_id'])
+
+                # 1. Scrivi dettaglio per collo (Goal 1)
+                for collo in packing_list_ordinata:
+                    collo_id = collo.get('collo_id')
+                    items_in_collo = collo.get('items', {})
+                    f.write(f"--- COLLO {collo_id} ---\n")
+                    if not items_in_collo:
+                        f.write("(Vuoto)\n")
+                    else:
+                        for codice_art, qta in items_in_collo.items():
+                            f.write(f"  {int(qta)} x [{codice_art}] {desc_map.get(codice_art, 'N/D')}\n")
+                            riepilogo_totale_articoli[codice_art] += qta
+                    f.write("\n")
+                
+                # 2. Scrivi riepilogo totale articoli
+                f.write("=" * 40 + "\n")
+                f.write("RIEPILOGO ARTICOLI TOTALI PRELEVATI:\n\n")
+                if not riepilogo_totale_articoli:
+                    f.write("Nessun articolo prelevato.\n")
+                else:
+                    for codice_art, qta_totale in sorted(riepilogo_totale_articoli.items()):
+                         f.write(f"  {int(qta_totale)} x [{codice_art}] {desc_map.get(codice_art, 'N/D')}\n")
+
+            print(f"DEBUG [complete_picking]: File packing list salvato con successo.")
+            flash(f"Packing list salvata ({filename}). In attesa di controllo.", "success")
+
+        except Exception as e:
+            print(f"ERRORE CRITICO [complete_picking]: Fallito salvataggio file .txt: {e}")
+            import traceback; traceback.print_exc()
+            flash("Picking completato, MA fallito salvataggio file .txt locale.", "danger")
+    # --- FINE SALVATAGGIO FILE ---
+
+
+    # --- Invio notifica (se 'approve_order' - invariato) ---
     if send_notification_flag:
         try:
             admin_users = [user for user, data in users_db.items() if 'admin' in data.get('roles', [])]
             if not admin_users:
-                 print("Nessun utente admin trovato per inviare notifica approvazione.")
+                 print("WARN [order_action]: Nessun admin per notifica approvazione.")
             for admin in admin_users:
-                print(f"Invio notifica approvazione ordine ad admin: {admin}")
+                print(f"Invio notifica approvazione ordine {order_name_notifica} ad admin: {admin}")
                 send_push_notification(admin, "Ordine Pronto Spedizione!", f"Ordine {order_name_notifica} approvato.")
         except Exception as e:
-            print(f"Errore invio notifica approvazione ordine {order_key}: {e}")
-            # Non sovrascrivere il flash di successo precedente
-            flash("Errore durante invio notifica ad admin.", "warning")
+            print(f"ERRORE [order_action]: Fallito invio notifica approvazione: {e}")
+            flash("Ordine approvato, ma errore invio notifica.", "warning")
 
     return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
 
@@ -1587,179 +1678,386 @@ def find_by_barcode():
 @app.route('/fabbisogno')
 @login_required
 def fabbisogno():
-    """Calcola e mostra il fabbisogno di articoli per un dato giorno."""
-    # --- FIX INDENTAZIONE: Corpo della funzione inserito qui ---
+    """
+    Calcola il fabbisogno giornaliero raggruppato per
+    Gruppo Merceologico -> Articolo -> Clienti.
+    """
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        flash("Accesso non autorizzato al calcolo fabbisogno.", "danger")
+        flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     giorno_filtro = request.args.get('giorno_filtro', '').strip()
-    fabbisogno_list = []
+    grouped_data = {}
     data_selezionata_formattata = ''
     error_message = None
 
     if giorno_filtro:
-        orders_list_copy = load_all_data() # Ottiene dati correnti (o None)
-
+        orders_list_copy = load_all_data()
         if orders_list_copy is None:
-            error_message = "Errore API: Impossibile caricare gli ordini per calcolare il fabbisogno."
+            error_message = "Errore API: Impossibile caricare gli ordini."
         else:
             try:
                 giorno_da_cercare = giorno_filtro.zfill(2)
                 if not giorno_da_cercare.isdigit() or len(giorno_da_cercare) != 2:
                     raise ValueError("Formato giorno non valido.")
 
-                print(f"Calcolo fabbisogno per giorno che termina con: '{giorno_da_cercare}'")
+                print(f"Fabbisogno: Filtro per giorno che termina con: '{giorno_da_cercare}'")
+                
                 ordini_del_giorno = [
-                    order for order in orders_list_copy
-                    if isinstance(order.get('data_documento'), str) and len(order['data_documento']) == 8 and order['data_documento'].endswith(giorno_da_cercare)
+                    o for o in orders_list_copy
+                    if isinstance(o.get('data_documento'), str) and len(o['data_documento']) == 8 and o['data_documento'].endswith(giorno_da_cercare)
                 ]
 
                 if not ordini_del_giorno:
                      error_message = f"Nessun ordine trovato per il giorno '{giorno_filtro}'."
-                     print(error_message)
                 else:
-                    print(f"Trovati {len(ordini_del_giorno)} ordini per il giorno. Aggrego articoli...")
-                    fabbisogno_dict = defaultdict(lambda: {'codice': '', 'descrizione': '', 'quantita_totale': 0.0})
-                    items_processed = 0
+                    print(f"Fabbisogno: Trovati {len(ordini_del_giorno)} ordini. Inizio aggregazione...")
+                    article_group_cache = {}
+                    
                     for order in ordini_del_giorno:
+                        cliente = order.get('ragione_sociale', 'Cliente Sconosciuto')
+                        
                         for item in order.get('righe', []):
                             codice = item.get('codice_articolo')
-                            desc = item.get('descr_articolo', 'N/D')
-                            try:
-                                # Usa 'or 0' per gestire None o stringhe vuote prima di float
-                                qta = float(item.get('quantita', 0) or 0)
-                            except (ValueError, TypeError):
-                                print(f"Attenzione: Quantità non valida per art. {codice} in ordine {order.get('numero')}: {item.get('quantita')}")
-                                qta = 0.0
+                            if not codice: continue
 
-                            if codice and qta > 0: # Aggrega solo se codice esiste e qta > 0
-                                fabbisogno_dict[codice]['codice'] = codice
-                                fabbisogno_dict[codice]['descrizione'] = desc
-                                fabbisogno_dict[codice]['quantita_totale'] += qta
-                                items_processed += 1
+                            if codice not in article_group_cache:
+                                print(f"Fabbisogno: Chiamata API per dettagli art: {codice}")
+                                details = get_article_details(codice)
+                                if details and details.get('cod_grp_merc'):
+                                     article_group_cache[codice] = details['cod_grp_merc'] or 'Nessun Gruppo'
+                                else:
+                                     article_group_cache[codice] = 'Nessun Gruppo'
+                            gruppo = article_group_cache[codice]
 
-                    fabbisogno_list = sorted(fabbisogno_dict.values(), key=lambda x: x['descrizione'])
+                            try: qta = float(item.get('quantita', 0) or 0)
+                            except (ValueError, TypeError): qta = 0.0
+
+                            if qta > 0:
+                                if gruppo not in grouped_data: grouped_data[gruppo] = {}
+                                if codice not in grouped_data[gruppo]:
+                                    grouped_data[gruppo][codice] = {
+                                        'descrizione': item.get('descr_articolo', 'N/D'),
+                                        'totale': 0.0,
+                                        'clienti': defaultdict(float)
+                                    }
+                                grouped_data[gruppo][codice]['totale'] += qta
+                                grouped_data[gruppo][codice]['clienti'][cliente] += qta
+
                     data_selezionata_formattata = f"Giorno: {giorno_filtro}"
-                    print(f"Aggregati {len(fabbisogno_list)} articoli unici da {items_processed} righe.")
+                    print("Fabbisogno: Aggregazione completata.")
+
+                    # --- NUOVA MODIFICA: Ordina gli articoli all'interno di ogni gruppo ---
+                    # Itera attraverso i gruppi appena creati
+                    for gruppo, articoli_dict in grouped_data.items():
+                        # Converte il dizionario di articoli (es. {'ART001': {...}, 'ART002': {...}})
+                        # in una lista di tuple (es. [('ART001', {...}), ('ART002', {...})])
+                        # e la ordina usando la chiave 'totale' (item[1]['totale']) in ordine decrescente (reverse=True)
+                        sorted_articoli_list = sorted(
+                            articoli_dict.items(),
+                            key=lambda item: item[1].get('totale', 0), # Usa .get() per sicurezza
+                            reverse=True # Ordine decrescente (dal più alto al più basso)
+                        )
+                        # Ricrea il dizionario degli articoli per quel gruppo come OrderedDict
+                        # per mantenere l'ordine appena stabilito.
+                        grouped_data[gruppo] = OrderedDict(sorted_articoli_list)
+                    # --- FINE NUOVA MODIFICA ---
 
             except ValueError as e:
                 error_message = f"Filtro giorno non valido: {e}."
-                print(error_message)
+                print(f"Errore filtro giorno: {e}")
             except Exception as e:
-                 error_message = f"Errore durante il calcolo del fabbisogno: {e}"
-                 print(error_message)
+                 print(f"Errore inatteso durante calcolo fabbisogno: {e}")
+                 import traceback
+                 traceback.print_exc()
+                 error_message = "Si è verificato un errore durante il calcolo."
 
-    if error_message:
-        flash(error_message, "warning")
+    if error_message: flash(error_message, "warning")
+
+    # Ordina i gruppi (già presente)
+    sorted_grouped_data = OrderedDict(sorted(grouped_data.items()))
 
     return render_template('fabbisogno.html',
-                           fabbisogno_list=fabbisogno_list,
+                           grouped_data=sorted_grouped_data, # Passa i dati doppiamente ordinati
                            giorno_selezionato=giorno_filtro,
                            data_selezionata_formattata=data_selezionata_formattata,
                            active_page='fabbisogno')
 
-@app.route('/api/scan-barcode/<sigla>/<int:serie>/<int:numero>', methods=['POST'])
-@login_required
-def scan_barcode_for_order(sigla, serie, numero):
+def _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code):
     """
-    Gestisce la scansione di un barcode per un ordine specifico.
-    Trova l'articolo corrispondente e aggiorna la quantità 'picked' per la riga d'ordine.
+    Funzione helper privata per aggiungere un articolo (identificato da primary_code)
+    a un collo, aggiornando lo stato globale in modo sicuro.
+    """
+    order_key = f"{sigla}:{serie}:{numero}"
+    order_id = str(numero)
+
+    # 2. Aggiorna la packing_list (sotto lock)
+    with app_data_store_lock:
+        order_data = app_data_store.get("orders", {}).get(order_key)
+        order_status = app_data_store.get("statuses", {}).get(order_id)
+        if not order_data or not order_status: 
+            return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
+        
+        if 'packing_list' not in order_status or not isinstance(order_status['packing_list'], list):
+             order_status['packing_list'] = []
+
+        # 3. Verifica se l'articolo è nell'ordine e calcola qta target
+        articolo_in_ordine = False
+        target_row_id = None
+        qta_target_totale = 0.0 # Pezzi totali ordinati
+        
+        righe_ordine_originali = order_data.get('righe', [])
+        for item in righe_ordine_originali:
+            if item.get('codice_articolo') == primary_code:
+                articolo_in_ordine = True
+                target_row_id = str(item.get('id_riga'))
+                # Calcola qta target totale (Pezzi Totali) - Logica corretta
+                nr_colli_val = 0.0; quantita_per_collo_val = 0.0
+                if item.get('nr_colli') is not None and str(item.get('nr_colli')).strip() != '': 
+                    try: nr_colli_val = float(str(item.get('nr_colli')).replace(',', '.'))
+                    except ValueError: nr_colli_val = 0.0
+                if item.get('quantita') is not None and str(item.get('quantita')).strip() != '': 
+                    try: quantita_per_collo_val = float(str(item.get('quantita')).replace(',', '.'))
+                    except ValueError: quantita_per_collo_val = 0.0
+                qta_target_totale = (nr_colli_val * quantita_per_collo_val) if nr_colli_val > 0 else quantita_per_collo_val
+                qta_target_totale = round(qta_target_totale) # Arrotonda a pezzi interi
+                break
+
+        if not articolo_in_ordine:
+             print(f"Articolo '{primary_code}' non trovato nelle righe dell'ordine {order_key}.")
+             return jsonify({'status': 'item_not_in_order', 'message': f"Articolo '{primary_code}' non presente in questo ordine."}), 404
+        
+        # 4. Trova (o crea) il collo
+        collo_da_aggiornare = None
+        for collo in order_status['packing_list']:
+            if collo.get('collo_id') == collo_id:
+                collo_da_aggiornare = collo; break
+        
+        if not collo_da_aggiornare:
+            # Questo non dovrebbe succedere se si usa 'Aggiungi Collo', ma per sicurezza
+            print(f"WARN [add_item]: Collo {collo_id} non trovato, creazione in corso...")
+            collo_da_aggiornare = {'collo_id': collo_id, 'items': {}}
+            order_status['packing_list'].append(collo_da_aggiornare)
+            
+        # 5. Incrementa la quantità dell'articolo nel collo di 1
+        if 'items' not in collo_da_aggiornare: collo_da_aggiornare['items'] = {}
+        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(primary_code, 0)
+        qta_attuale_nel_collo += 1
+        collo_da_aggiornare['items'][primary_code] = qta_attuale_nel_collo
+        print(f"Articolo '{primary_code}' aggiunto a Collo {collo_id}. Qta in collo: {qta_attuale_nel_collo}")
+
+        # 6. Aggiorna il riepilogo 'picked_items' (Totale in tutti i colli)
+        qta_totale_prelevata = 0
+        for collo in order_status['packing_list']:
+             qta_totale_prelevata += collo.get('items', {}).get(primary_code, 0)
+        
+        if target_row_id:
+             if 'picked_items' not in order_status: order_status['picked_items'] = {}
+             order_status['picked_items'][target_row_id] = qta_totale_prelevata
+             print(f"Riepilogo 'picked_items' per riga {target_row_id} aggiornato a {qta_totale_prelevata} (Totale Pz Ordinati: {qta_target_totale})")
+        
+        # 7. Verifica se supera l'ordinato (Warning)
+        message = f"Aggiunto 1 Pz a Collo {collo_id} (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
+        status = 'success'
+        if qta_totale_prelevata > qta_target_totale:
+            message = f"Attenzione! Qta prelevata ({int(qta_totale_prelevata)}) supera ordinato ({int(qta_target_totale)})!"
+            status = 'warning_overpick'
+        elif qta_totale_prelevata == qta_target_totale:
+             message = f"Articolo {primary_code} completato! (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
+             status = 'success_completed'
+
+        # Restituisci la packing list aggiornata e il riepilogo
+        return jsonify({
+            'status': status,
+            'message': message,
+            'packing_list': order_status['packing_list'],
+            'picked_items': order_status['picked_items']
+        })
+
+@app.route('/api/scan-barcode/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>', methods=['POST'])
+@login_required
+def scan_barcode_for_collo(sigla, serie, numero, collo_id):
+    """
+    Gestisce la scansione (add 1) da BARCODE a un COLLO specifico.
+    Accetta solo 'barcode'.
     """
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
         return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
 
     data = request.json
     barcode = data.get('barcode', '').strip()
+    
     if not barcode:
         return jsonify({'status': 'error', 'message': 'Barcode mancante'}), 400
 
-    order_key = f"{sigla}:{serie}:{numero}"
-    order_id = str(numero)
-
-    print(f"Ricevuto barcode '{barcode}' per ordine {order_key}")
-
-    # 1. Trova codice articolo primario dall'alias (barcode)
-    primary_code = find_article_code_by_alt_code(barcode) # Gestisce errori API interni
+    print(f"Ricevuto barcode '{barcode}' per ordine {sigla}:{serie}:{numero}, Collo ID: {collo_id}")
+    
+    # --- Logica 1: Trova codice primario da Barcode ---
+    primary_code = find_article_code_by_alt_code(barcode)
     if not primary_code:
-        print(f"Barcode '{barcode}' non trovato o errore API.")
-        return jsonify({'status': 'not_found', 'message': f"Barcode '{barcode}' non trovato."}), 404
-
+        # Controlla se il barcode è esso stesso un codice primario
+        temp_details = get_article_details(barcode)
+        if temp_details and temp_details.get('codice') == barcode:
+             print(f"Info: Barcode '{barcode}' è un codice articolo primario.")
+             primary_code = barcode
+        else:
+             print(f"Barcode '{barcode}' non trovato.")
+             return jsonify({'status': 'not_found', 'message': f"Articolo non trovato per barcode '{barcode}'."}), 404
+    
     print(f"Barcode '{barcode}' corrisponde a codice primario '{primary_code}'")
 
-    # 2. Aggiorna lo stato dell'ordine (sotto lock)
+    # Chiama la funzione helper condivisa
+    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code)
+
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/add', methods=['POST'])
+@login_required
+def add_item_to_collo_by_code(sigla, serie, numero, collo_id):
+    """
+    Gestisce l'aggiunta manuale (+1) da bottone a un COLLO specifico.
+    Accetta solo 'article_code'.
+    """
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+
+    data = request.json
+    article_code = data.get('article_code', '').strip() # Legge solo article_code
+    
+    if not article_code:
+        return jsonify({'status': 'error', 'message': 'Codice Articolo mancante'}), 400
+    
+    print(f"Ricevuto article_code '{article_code}' per ordine {sigla}:{serie}:{numero}, Collo ID: {collo_id}")
+    
+    # Per questa rotta, l'article_code è il primary_code
+    primary_code = article_code
+
+    # Chiama la funzione helper condivisa
+    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code)
+
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/create', methods=['POST'])
+@login_required
+def create_new_collo(sigla, serie, numero):
+    """Crea un nuovo collo vuoto per l'ordine."""
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+
+    order_id = str(numero)
     with app_data_store_lock:
-        order_data = app_data_store.get("orders", {}).get(order_key)
         order_status = app_data_store.get("statuses", {}).get(order_id)
+        if not order_status: return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
+        
+        if 'packing_list' not in order_status or not isinstance(order_status['packing_list'], list):
+             order_status['packing_list'] = []
+        
+        # Trova l'ID più alto e aggiungi 1
+        new_collo_id = 1
+        if order_status['packing_list']:
+            try:
+                max_id = max(c.get('collo_id', 0) for c in order_status['packing_list'])
+                new_collo_id = max_id + 1
+            except ValueError:
+                 pass # Lascia 1
+        
+        # Aggiungi il nuovo collo vuoto
+        new_collo = {'collo_id': new_collo_id, 'items': {}}
+        order_status['packing_list'].append(new_collo)
+        
+        print(f"DEBUG [create_collo]: Creato Collo {new_collo_id} per ordine {order_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'new_collo_id': new_collo_id,
+            'packing_list': order_status['packing_list']
+        })
 
-        if not order_data or not order_status:
-            print(f"Ordine {order_key} o stato non trovato nello store.")
-            return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/remove', methods=['POST'])
+@login_required
+def remove_item_from_collo(sigla, serie, numero, collo_id):
+    """Rimuove 1 pezzo di un articolo da un collo specifico."""
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+        
+    data = request.json
+    article_code = data.get('article_code') # Riceve il CODICE ARTICOLO, non il barcode
+    if not article_code:
+         return jsonify({'status': 'error', 'message': 'Codice articolo mancante'}), 400
 
-        # Assicurati che picked_items sia un dizionario
-        if not isinstance(order_status.get('picked_items'), dict):
-             order_status['picked_items'] = {}
+    order_id = str(numero)
+    order_key = f"{sigla}:{serie}:{numero}"
+    print(f"Richiesta rimozione 1 pz di '{article_code}' da Collo {collo_id}, Ordine {order_key}")
 
-        # 3. Trova la riga corrispondente nell'ordine (prima riga non completamente prelevata)
-        target_row_id = None
-        target_row_index = -1
-        found_match = False
-        row_update_details = None
+    with app_data_store_lock:
+        order_status = app_data_store.get("statuses", {}).get(order_id)
+        if not order_status or 'packing_list' not in order_status:
+            return jsonify({'status': 'error', 'message': 'Ordine o packing list non trovata'}), 404
 
-        for i, row in enumerate(order_data.get('righe', [])):
-            if row.get('codice_articolo') == primary_code:
-                row_id_str = str(row.get('id_riga')) # Chiave per picked_items
-                if not row_id_str:
-                    print(f"WARN: Riga {i} per articolo {primary_code} senza id_riga.")
-                    continue
+        collo_da_aggiornare = None
+        for collo in order_status['packing_list']:
+            if collo.get('collo_id') == collo_id:
+                collo_da_aggiornare = collo
+                break
+        
+        if not collo_da_aggiornare or not collo_da_aggiornare.get('items'):
+             return jsonify({'status': 'error', 'message': f"Collo {collo_id} non trovato o vuoto."}), 404
+             
+        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(article_code, 0)
+        
+        if qta_attuale_nel_collo <= 0:
+            # L'articolo non è (o non è più) in questo collo
+            print(f"Articolo {article_code} non presente nel collo {collo_id}.")
+            # Rimuovi la chiave se esiste ma è a 0
+            if article_code in collo_da_aggiornare['items']:
+                 del collo_da_aggiornare['items'][article_code]
+            qta_totale_prelevata_zero = 0 # Calcola comunque il riepilogo
+            for c in order_status['packing_list']: qta_totale_prelevata_zero += c.get('items', {}).get(article_code, 0)
+            target_row_id_zero = None
+            order_info_zero = app_data_store.get("orders", {}).get(order_key, {})
+            for item in order_info_zero.get('righe', []):
+                 if item.get('codice_articolo') == article_code: target_row_id_zero = str(item.get('id_riga')); break
+            if target_row_id_zero: order_status.setdefault('picked_items', {})[target_row_id_zero] = qta_totale_prelevata_zero
 
-                try:
-                    qta_ordinata = float(row.get('quantita', 0) or 0)
-                    qta_gia_prelevata = float(order_status['picked_items'].get(row_id_str, 0) or 0)
-                except (ValueError, TypeError):
-                     print(f"WARN: Quantità non valida per riga {row_id_str}, articolo {primary_code}")
-                     qta_ordinata = 0
-                     qta_gia_prelevata = 0
-
-                # Se questa riga ha ancora quantità da prelevare
-                if qta_gia_prelevata < qta_ordinata:
-                    target_row_id = row_id_str
-                    target_row_index = i # Salva indice per riferimento
-                    found_match = True
-
-                    # Incrementa la quantità prelevata per questa riga
-                    new_picked_qty = qta_gia_prelevata + 1
-                    order_status['picked_items'][target_row_id] = new_picked_qty
-
-                    print(f"Articolo '{primary_code}' trovato! Riga ID: {target_row_id}. Qta prelevata aggiornata a: {new_picked_qty}/{qta_ordinata}")
-
-                    # Prepara dettagli per la risposta JSON
-                    row_update_details = {
-                        'id_riga': target_row_id,
-                        'codice_articolo': primary_code,
-                        'descrizione': row.get('descr_articolo', 'N/D'),
-                        'qta_ordinata': qta_ordinata,
-                        'qta_prelevata': new_picked_qty
-                    }
-                    break # Ferma alla prima riga trovata con quantità disponibile
-
-        # 4. Gestisci i risultati
-        if found_match and row_update_details:
-            # Salva lo stato aggiornato (anche se modificato per riferimento)
-            app_data_store.setdefault("statuses", {})[order_id] = order_status
             return jsonify({
-                'status': 'success',
-                'message': f"Articolo '{primary_code}' aggiunto.",
-                'item': row_update_details
+                'status': 'success', # Successo, anche se la qta era già 0
+                'message': f"Articolo {article_code} non presente nel collo {collo_id}.",
+                'packing_list': order_status['packing_list'],
+                'picked_items': order_status.get('picked_items', {})
             })
-        elif any(r.get('codice_articolo') == primary_code for r in order_data.get('righe', [])):
-             # Articolo presente ma già completamente prelevato
-             print(f"Articolo '{primary_code}' presente nell'ordine ma già completamente prelevato.")
-             return jsonify({'status': 'already_picked', 'message': f"Articolo '{primary_code}' già completamente prelevato."}), 409 # Conflict
+            
+        # Riduci quantità di 1
+        qta_attuale_nel_collo -= 1
+        
+        if qta_attuale_nel_collo == 0:
+            del collo_da_aggiornare['items'][article_code] # Rimuovi se 0
         else:
-             # Articolo non trovato nell'ordine
-             print(f"Articolo '{primary_code}' (da barcode '{barcode}') non trovato nelle righe dell'ordine {order_key}.")
-             return jsonify({'status': 'item_not_in_order', 'message': f"Articolo '{primary_code}' non presente in questo ordine."}), 404 # Not Foun
+            collo_da_aggiornare['items'][article_code] = qta_attuale_nel_collo
+        
+        print(f"Articolo '{article_code}' rimosso da Collo {collo_id}. Qta rimasta nel collo: {qta_attuale_nel_collo}")
+
+        # Aggiorna il riepilogo 'picked_items' (Totale in tutti i colli)
+        target_row_id = None
+        order_info = app_data_store.get("orders", {}).get(order_key, {})
+        for item in order_info.get('righe', []):
+             if item.get('codice_articolo') == article_code:
+                 target_row_id = str(item.get('id_riga'))
+                 break
+
+        qta_totale_prelevata = 0
+        for collo in order_status['packing_list']:
+             qta_totale_prelevata += collo.get('items', {}).get(article_code, 0)
+        
+        if target_row_id:
+             if 'picked_items' not in order_status: order_status['picked_items'] = {}
+             order_status['picked_items'][target_row_id] = qta_totale_prelevata
+             print(f"Riepilogo 'picked_items' per riga {target_row_id} aggiornato a {qta_totale_prelevata}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': f"Rimosso 1 pz di {article_code} da Collo {collo_id}",
+            'packing_list': order_status['packing_list'],
+            'picked_items': order_status['picked_items']
+        })
+
+# --- FINE NUOVE API COLLI ---
+
         
 @app.route('/api/update-alt-code', methods=['POST'])
 @login_required

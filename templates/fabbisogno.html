@@ -7,64 +7,268 @@
     <h1>Fabbisogno Giornaliero</h1>
 </div>
 
-<div class="card" style="margin-bottom: 1.5rem;">
-    <div class="card-body" style="padding: 1rem;">
-        <form method="GET" action="{{ url_for('fabbisogno') }}">
-            <div style="display: flex; gap: 1rem; align-items: center;">
-                <label for="giorno_filtro" style="font-weight: 500; color: var(--secondary-text-color);">Filtra per Giorno:</label>
-                <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro" value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="Giorno" style="width: 100px; padding: 8px 12px;">
-                <button type="submit" class="btn btn-primary" style="padding: 8px 16px;">Mostra</button>
-                <a href="{{ url_for('fabbisogno') }}" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Pulisci</a>
-            </div>
+{# Form Ricerca (Leggermente modificato per stile Bootstrap) #}
+<div class="card mb-3">
+    <div class="card-body p-3">
+        <form method="GET" action="{{ url_for('fabbisogno') }}" class="d-flex align-items-center gap-2">
+            <label for="giorno_filtro" class="form-label mb-0 me-2">Giorno:</label>
+            <input type="number" class="form-control" id="giorno_filtro" name="giorno_filtro"
+                value="{{ giorno_selezionato or '' }}" min="1" max="31" placeholder="GG" style="width: 80px;">
+            <button type="submit" class="btn btn-primary">Mostra</button>
+            {% if giorno_selezionato %}
+            <a href="{{ url_for('fabbisogno') }}" class="btn btn-outline-danger">Pulisci</a>
+            {% endif %}
         </form>
     </div>
 </div>
 
-{% if fabbisogno_list %}
-    <div class="card">
-        <div class="card-header">
-            Lista Articoli per il {{ data_selezionata_formattata }}
-        </div>
-        <div class="table-responsive">
-            <table style="width: 100%; border-collapse: collapse; text-align: left;">
-                <thead>
-                    <tr>
-                        <th style="padding: 1rem; border-bottom: 1px solid var(--separator-color); font-weight: 600; color: var(--secondary-text-color);">Articolo</th>
-                        <th style="padding: 1rem; border-bottom: 1px solid var(--separator-color); font-weight: 600; color: var(--secondary-text-color); text-align: right;">Quantità Totale</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in fabbisogno_list %}
-                    <tr>
-                        <td style="padding: 1rem; border-bottom: 1px solid var(--separator-color);">
-                            <p style="font-weight: 600; margin: 0 0 4px 0;">{{ item.descrizione }}</p>
-                            <p style="color: var(--secondary-text-color); font-size: 0.9rem; margin: 0;">Cod: {{ item.codice }}</p>
-                        </td>
-                        <td style="padding: 1rem; border-bottom: 1px solid var(--separator-color); text-align: right; font-size: 1.5rem; font-weight: 700;">
-                            {% if item.quantita_totale % 1 != 0 %}
-                                {{ "%.2f"|format(item.quantita_totale) }}
-                            {% else %}
-                                {{ item.quantita_totale | int }}
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+{# Usa la nuova variabile grouped_data invece di fabbisogno_list #}
+{% if grouped_data %}
+<div class="mb-3">
+    <h4 style="font-weight: 500; color: var(--secondary-text-color);">Riepilogo per Giorno {{ giorno_selezionato }}</h4>
+</div>
+
+{# 1. Loop Esterno: Gruppi Merceologici (usiamo accordion Bootstrap) #}
+<div class="accordion" id="fabbisognoAccordion">
+    {% for gruppo, articoli in grouped_data.items() %}
+    {% set gruppo_id = "group-" ~ (loop.index) %} {# ID univoco per il collapse #}
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="header-{{ gruppo_id }}">
+            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#{{ gruppo_id }}"
+                aria-expanded="true" aria-controls="{{ gruppo_id }}">
+                <span style="font-weight: 600; font-size: 1.1rem; color: var(--primary-text-color);">{{ gruppo }}</span>
+            </button>
+        </h2>
+        <div id="{{ gruppo_id }}" class="accordion-collapse collapse show" aria-labelledby="header-{{ gruppo_id }}">
+            <div class="accordion-body p-0">
+                {# Tabella per gli articoli di questo gruppo #}
+                <div class="table-responsive">
+                    <table class="table align-middle mb-0 fabbisogno-table">
+                        <thead>
+                            <tr>
+                                <th>Articolo</th>
+                                <th class="text-end">Totale</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {# --- MODIFICA: Rimuovi il filtro dictsort --- #}
+                            {# I dati sono già ordinati da app.py #}
+                            {% for codice_art, dettagli in articoli.items() %}
+                            {# --- FINE MODIFICA --- #}
+                            {% set art_id = "art-" ~ (codice_art | replace('.', '-')) ~ "-" ~ loop.index %}
+                            <tr>
+                                <td>
+                                    <p class="mb-0 fw-bold">{{ dettagli.descrizione }}</p>
+                                    <small class="text-muted">Cod: {{ codice_art }}</small>
+                                    {# Bottone per mostrare dettaglio clienti #}
+                                    <button class="btn btn-link btn-sm p-0 d-block" type="button"
+                                        data-bs-toggle="collapse" data-bs-target="#{{ art_id }}-clients"
+                                        aria-expanded="false">
+                                        Vedi dettaglio clienti ({{ dettagli.clienti|length }})
+                                    </button>
+                                </td>
+                                <td class="text-end" style="font-size: 1.4rem; font-weight: 700;">
+                                    {# Formatta quantità #}
+                                    {{ dettagli.totale | int if dettagli.totale.is_integer() else
+                                    "%.2f"|format(dettagli.totale) }}
+                                </td>
+                            </tr>
+                            {# 3. Loop Nascosto: Clienti (dentro un collapse) #}
+                            <tr class="collapse-row">
+                                <td colspan="2" class="p-0" style="border: none;">
+                                    <div class="collapse" id="{{ art_id }}-clients">
+                                        <ul class="list-group list-group-flush small-list">
+                                            {% for cliente, qta_cliente in dettagli.clienti|dictsort(by='value',
+                                            reverse=True) %} {# Ordina clienti per quantità #}
+                                            <li
+                                                class="list-group-item d-flex justify-content-between align-items-center bg-light">
+                                                <span>{{ cliente }}</span>
+                                                <strong>{{ qta_cliente | int if qta_cliente.is_integer() else
+                                                    "%.2f"|format(qta_cliente) }}</strong>
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
+    {% endfor %}
+</div>
+
 {% elif giorno_selezionato %}
-    <div class="card">
-        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
-            Nessun ordine trovato per il giorno {{ giorno_selezionato }}.
-        </div>
+{# Messaggio se il giorno è selezionato ma non ci sono dati #}
+<div class="card">
+    <div class="card-body text-center p-4 text-muted">
+        Nessun ordine trovato per il giorno {{ giorno_selezionato }}.
     </div>
+</div>
 {% else %}
-    <div class="card">
-        <div class="card-body" style="text-align: center; padding: 2.5rem; color: var(--secondary-text-color);">
-            Inserisci un giorno (es. 19) per calcolare il fabbisogno.
-        </div>
+{# Messaggio iniziale #}
+<div class="card">
+    <div class="card-body text-center p-5 text-muted">
+        <h4>Seleziona un giorno</h4>
+        <p>Inserisci il numero del giorno (es. 19) per calcolare il fabbisogno raggruppato.</p>
     </div>
+</div>
 {% endif %}
+
+{# Stili aggiuntivi per questa pagina #}
+<style>
+    .fabbisogno-table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+    }
+
+    .fabbisogno-table th,
+    .fabbisogno-table td {
+        padding: 0.75rem 1rem;
+        vertical-align: top;
+        border-bottom: 1px solid var(--separator-color);
+    }
+
+    .fabbisogno-table thead th {
+        border-bottom-width: 2px;
+        color: var(--secondary-text-color);
+        font-weight: 600;
+        font-size: 0.9em;
+    }
+
+    .fabbisogno-table tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    .fabbisogno-table .btn-link {
+        font-size: 0.8em;
+        text-decoration: none;
+        padding-left: 0;
+    }
+
+    .fabbisogno-table .btn-link:focus {
+        box-shadow: none;
+    }
+
+    .collapse-row td {
+        padding: 0 !important;
+        border: none !important;
+    }
+
+    .small-list .list-group-item {
+        font-size: 0.9rem;
+        padding: 0.5rem 1rem;
+        background-color: #f8f9fa !important;
+        /* Sfondo leggermente grigio per i clienti */
+        border-color: #eee;
+    }
+
+    .accordion-item {
+        border-color: var(--separator-color);
+        border-radius: 0.5rem;
+    }
+
+    .accordion-button:focus {
+        box-shadow: none;
+    }
+
+    .accordion-button:not(.collapsed) {
+        color: var(--bs-primary);
+        background-color: #e7f1ff;
+        /* Sfondo blu chiaro quando aperto */
+        box-shadow: none;
+    }
+
+    .accordion-button:not(.collapsed)::after {
+        background-image: var("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%230c63e4'%3e%3cpath fill-rule='evenodd' d='M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z'/%3e%3c/svg%3e");
+    }
+
+    /* Stili base Bootstrap (ridondanti se base.html è completo) */
+    .form-label {
+        margin-bottom: .5rem;
+    }
+
+    .mb-0 {
+        margin-bottom: 0 !important;
+    }
+
+    .mb-1 {
+        margin-bottom: .25rem !important;
+    }
+
+    .mb-2 {
+        margin-bottom: .5rem !important;
+    }
+
+    .mb-3 {
+        margin-bottom: 1rem !important;
+    }
+
+    .mb-4 {
+        margin-bottom: 1.5rem !important;
+    }
+
+    .me-2 {
+        margin-right: .5rem !important;
+    }
+
+    .p-0 {
+        padding: 0 !important;
+    }
+
+    .p-3 {
+        padding: 1rem !important;
+    }
+
+    .p-4 {
+        padding: 1.5rem !important;
+    }
+
+    .p-5 {
+        padding: 3rem !important;
+    }
+
+    .px-0 {
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+    }
+
+    .py-1 {
+        padding-top: .25rem !important;
+        padding-bottom: .25rem !important;
+    }
+
+    .mt-2 {
+        margin-top: .5rem !important;
+    }
+
+    .text-end {
+        text-align: right !important;
+    }
+
+    .text-primary {
+        color: var(--bs-primary) !important;
+    }
+
+    .text-secondary {
+        color: var(--secondary-text-color) !important;
+    }
+
+    .align-middle {
+        vertical-align: middle !important;
+    }
+
+    .d-block {
+        display: block !important;
+    }
+
+    .list-group-flush .list-group-item:last-child {
+        border-bottom-width: 0;
+    }
+</style>
 
 {% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Dettaglio Ordine {{ order.numero }}{% endblock %}
+{% block title %}Picking Ordine {{ order.numero }}{% endblock %}
 
 {% block content %}
 <div class="header">
@@ -8,256 +8,543 @@
         <h1 style="font-size: 2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
         <p style="color: var(--secondary-text-color); margin: 0; font-weight: 500;">{{ order.ragione_sociale }}</p>
     </div>
-    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a> 
+    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a>
 </div>
 
-{# Mantenute card Dati Cliente e Stato Picking semplici #}
+{# Card Dati Cliente (Usa campi effettivi) #}
 <div class="card mb-3">
     <div class="card-header">Dati Cliente</div>
     <div class="card-body">
-        <p><strong>Località:</strong> {{ order.localita_effettiva }}</p>
+        <p><strong>Indirizzo:</strong> {{ order.indirizzo_effettivo or 'N/D' }}</p>
+        <p><strong>Località:</strong> {{ order.localita_effettiva or 'N/D' }}</p>
+        {% if order.telefono_effettivo %}<p><strong>Telefono:</strong> {{ order.telefono_effettivo }}</p>{% endif %}
         {% if order.nota %}<p><strong>Note Ordine:</strong> {{ order.nota }}</p>{% endif %}
+        {% if order.pagamento_desc %}<p><strong>Pagamento:</strong> {{ order.pagamento_desc }}</p>{% endif %}
     </div>
 </div>
 
+{# Card Stato Picking #}
 <div class="card mb-3">
     <div class="card-header">Stato Picking</div>
     <div class="card-body">
         <p style="margin: 0;">
             <span style="color: var(--secondary-text-color); font-weight: 500;">Stato Attuale:</span>
-            {# Badge stile semplice #}
-            <span class="badge
-                {% if state.status == 'In Picking' %} bg-primary
-                {% elif state.status == 'In Controllo' %} bg-warning text-dark
-                {% elif state.status == 'Completato' %} bg-success
-                {% else %} bg-secondary {% endif %}">
+            <span class="badge status-badge 
+                {% if state.status == 'In Picking' %} status-picking
+                {% elif state.status == 'In Controllo' %} status-controllo
+                {% elif state.status == 'Completato' %} status-completato
+                {% else %} status-default {% endif %}">
                 {{ state.status }}
             </span>
         </p>
     </div>
 </div>
 
+{# --- INTERFACCIA PICKING PER COLLI --- #}
 <div class="card">
-    <div class="card-header">Articoli da Preparare</div>
+    <div class="card-header">Gestione Picking</div>
 
+    {# Pannello Azioni (Solo 'In Picking') #}
     {% if state.status == 'In Picking' %}
-    <div class="card-body" style="background-color: #f8f9fa; padding: 1rem; border-bottom: 1px solid #dee2e6;">
-        <label for="barcode-scanner" style="font-weight: 500; margin-bottom: 0.5rem; display: block;">Scanner Barcode</label>
-        <input type="text" id="barcode-scanner" class="form-control" placeholder="Scansiona codice..." autofocus>
-        <div id="scan-message" style="margin-top: 0.75rem; min-height: 20px; font-weight: 500;"></div>
+    <div class="card-body bg-light border-bottom">
+        <div class="row g-2 align-items-end">
+            {# Bottone Nuovo Collo #}
+            <div class="col-12 col-sm-4">
+                <button class="btn btn-outline-primary w-100" id="add-collo-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                        class="bi bi-plus-square" viewBox="0 0 16 16">
+                        <path
+                            d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z" />
+                        <path
+                            d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
+                    </svg>
+                    Aggiungi Collo
+                </button>
+            </div>
+            {# Info Collo Attivo #}
+            <div class="col-12 col-sm-8">
+                <label for="barcode-scanner" class="form-label fw-bold">Collo Attivo: <span id="active-collo-display"
+                        class="badge bg-primary">Nessuno</span></label>
+                <input type="text" id="barcode-scanner" class="form-control" placeholder="Scansiona in collo attivo..."
+                    autofocus>
+                <div id="scan-message" class="mt-2" style="min-height: 20px; font-weight: 500;"></div>
+            </div>
+        </div>
     </div>
     {% endif %}
 
-    {# Form per azioni stato #}
-    <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST" id="state-change-form">
-        {# Lista Articoli - Ripristino stile precedente #}
-        <div class="article-list-container"> {# Contenitore per le righe #}
-            {% if order.righe %}
-                {% for item in order.righe %}
-                    {% set row_id = item.id_riga | string %}
-                    {# --- MODIFICA: Calcola qta_ordinata in base a nr_colli --- #}
-                    {# Prova a convertire nr_colli in numero #}
-                    {% set nr_colli_val = (item.nr_colli | string | replace(',', '.') | float) if item.nr_colli is defined and item.nr_colli is not none and item.nr_colli != '' else 0.0 %}
-                    {# Prova a convertire quantita in numero #}
-                    {% set quantita_val = (item.quantita | string | replace(',', '.') | float) if item.quantita is defined and item.quantita is not none and item.quantita != '' else 0.0 %}
+    {# Due sezioni: Rimanenti e Packing List #}
+    <div class="card-body p-0">
+        <ul class="nav nav-tabs nav-fill" id="picking-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="tab-rimanenti" data-bs-toggle="tab"
+                    data-bs-target="#content-rimanenti" type="button" role="tab" aria-controls="content-rimanenti"
+                    aria-selected="true">
+                    Rimanenti
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="tab-packing-list" data-bs-toggle="tab"
+                    data-bs-target="#content-packing-list" type="button" role="tab" aria-controls="content-packing-list"
+                    aria-selected="false">
+                    Packing List (Colli)
+                </button>
+            </li>
+        </ul>
 
-                    {% if nr_colli_val > 0 %}
-                        {% set qta_ordinata = nr_colli_val * quantita_val %}
-                    {# Altrimenti, usa quantita_val #}
-                    {% else %}
-                        {% set qta_ordinata = quantita_val %}
+        <div class="tab-content" id="picking-tabs-content">
+            {# --- Tab 1: Articoli Rimanenti --- #}
+            <div class="tab-pane fade show active" id="content-rimanenti" role="tabpanel"
+                aria-labelledby="tab-rimanenti">
+                <div class="article-list-container" id="remaining-items-list">
+                    {# Generato da JavaScript #}
+                    {% if not order.righe %}
+                    <p class="text-center text-muted p-3">Nessun articolo in questo ordine.</p>
                     {% endif %}
-                    {# --- FINE MODIFICA --- #}
-                    {% set qta_prelevata = (state.picked_items.get(row_id, '0') | string | replace(',', '.') | float) if state.picked_items else 0.0 %}
-                    {% set is_complete = (qta_prelevata >= qta_ordinata and qta_ordinata > 0) %}
-                    
-                <div class="article-row {% if is_complete %}picked-complete-simple{% endif %}" id="order-row-{{ row_id }}">
-                    <div class="article-info">
-                        <p class="article-description">{{ item.descr_articolo or 'N/D' }}</p>
-                        <p class="article-code-simple">Cod: {{ item.codice_articolo }}</p>
-                    </div>
-                    <div class="article-quantity">
-                        <span {% if is_complete %}class="text-success fw-bold"{% endif %}>
-                             {# Mostra solo qta ordinata o qta prelevata/ordinata #}
-                             {% if state.status == 'In Picking' %}
-                                <span class="picked-qty">{{ qta_prelevata | int }}</span> / <span class="ordered-qty">{{ qta_ordinata | int }}</span>
-                             {% else %}
-                                {{ qta_ordinata | int }} <span style="font-size: 0.8em; color: #6c757d;">Ordinati</span>
-                             {% endif %}
-                        </span>
-                        {# Dettaglio Colli se presente #}
-                        {% if nr_colli_val > 0 and quantita_val > 0 %}
-                           <small class="d-block text-muted">{{ nr_colli_val | int }} x {{ quantita_val | int if (quantita_val * 100) % 100 == 0 else "%.2f"|format(quantita_val) }} pz</small>
-                        {% elif quantita_val > 0 %}
-                        {% endif %}
-                    </div>
                 </div>
-                {% endfor %}
-            {% else %}
-                <div style="text-align: center; padding: 2rem; color: var(--secondary-text-color);">Nessun articolo trovato per questo ordine.</div>
-            {% endif %}
-        </div>
+            </div>
 
-        {# Pulsanti cambio stato - Ripristino stile precedente #}
-        <div class="action-footer-simple"> {# Footer stile semplice #}
-            {% if state.status == 'Da Lavorare' %}
-                <button type="submit" name="action" value="start_picking" class="btn btn-primary btn-lg w-100">Avvia Picking</button>
-            {% elif state.status == 'In Picking' %}
-                {# Layout come immagine 'dopo' #}
-                <div class="mb-3">
-                    <label for="colli_totali_operatore" class="form-label">TOTALE COLLI PREPARATI:</label>
-                    <input type="number" class="form-control text-center" style="max-width: 100px; display: inline-block; margin-left: 10px;" id="colli_totali_operatore" name="colli_totali_operatore" value="{{ state.colli_totali_operatore or 0 }}" min="0" required>
+            {# --- Tab 2: Packing List (Cosa c'è nei colli) --- #}
+            <div class="tab-pane fade" id="content-packing-list" role="tabpanel" aria-labelledby="tab-packing-list">
+                <div class="packing-list-container" id="packing-list-summary">
+                    {# Generato da JavaScript #}
+                    {% if not state.packing_list %}
+                    <p class="text-center text-muted p-3">Nessun collo ancora creato.</p>
+                    {% endif %}
                 </div>
-                <button type="submit" name="action" value="complete_picking" class="btn btn-success btn-lg w-100" style="background-color: #34A853; border-color: #34A853;">Completa Picking e Invia a Controllo</button> {# Colore verde simile #}
+            </div>
+        </div>
+    </div>
+
+    {# Form per Azioni Stato #}
+    <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}"
+        method="POST" id="state-change-form">
+        <div class="card-footer bg-light p-3 action-footer-simple">
+            {% if state.status == 'Da Lavorare' %}
+            <button type="submit" name="action" value="start_picking" class="btn btn-primary btn-lg w-100">Avvia
+                Picking</button>
+
+            {% elif state.status == 'In Picking' %}
+            <div class="mb-3">
+                <label for="colli_totali_operatore" class="form-label fw-bold">TOTALE COLLI (Verifica):</label>
+                <input type="number" class="form-control text-center"
+                    style="max-width: 100px; display: inline-block; margin-left: 10px;" id="colli_totali_operatore"
+                    name="colli_totali_operatore" value="{{ state.packing_list | length }}" min="0" required>
+            </div>
+            <button type="submit" name="action" value="complete_picking" class="btn btn-success btn-lg w-100"
+                style="background-color: #34A853; border-color: #34A853;">Completa Picking e Invia a Controllo</button>
+
             {% elif state.status == 'In Controllo' %}
-                 <p class="fs-5 mb-3"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore or 'N/D' }}</strong></p>
-                 <div class="d-flex gap-2 justify-content-center"> 
-                     <button type="submit" name="action" value="approve_order" class="btn btn-success btn-lg">Approva Ordine</button>
-                     <button type="submit" name="action" value="reject_order" class="btn btn-danger btn-lg">Rimanda al Picking</button>
-                 </div>
+            <p class="fs-5 mb-3"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore or 'N/D' }}</strong>
+            </p>
+            <p class="fs-6 text-muted">(Colli Effettivi in Packing List: {{ state.packing_list | length }})</p>
+            <div class="d-flex gap-2 justify-content-center">
+                <button type="submit" name="action" value="approve_order" class="btn btn-success btn-lg">Approva
+                    Ordine</button>
+                <button type="submit" name="action" value="reject_order" class="btn btn-danger btn-lg">Rimanda al
+                    Picking</button>
+            </div>
+
             {% elif state.status == 'Completato' %}
-                 <div class="alert alert-success d-flex align-items-center mb-0" role="alert">
-                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-check-circle-fill flex-shrink-0 me-2" viewBox="0 0 16 16" role="img" aria-label="Success:">
-                         <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
-                     </svg>
-                     <div>Ordine Completato</div>
-                 </div>
+            <div class="alert alert-success d-flex align-items-center mb-0" role="alert">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor"
+                    class="bi bi-check-circle-fill flex-shrink-0 me-2" viewBox="0 0 16 16">
+                    <path
+                        d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
+                </svg>
+                <div>Ordine Completato</div>
+            </div>
             {% endif %}
         </div>
     </form>
 </div>
 
-<!-- CSS AGGIORNATO / RIPRISTINATO -->
+{# --- CSS --- #}
 <style>
-/* Header invariato */
-.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #dee2e6; }
-.header h1 { font-size: 1.8rem; }
+    /* Stili base (incollati da base.html per sicurezza) */
+    .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid #dee2e6;
+    }
 
-/* Card semplici */
-.card { border: 1px solid #e0e0e0; border-radius: 0.75rem; margin-bottom: 1rem; background-color: #fff; }
-.card-header { background-color: #f8f9fa; font-weight: 600; padding: 0.75rem 1rem; border-bottom: 1px solid #e0e0e0;}
-.card-body { padding: 1rem; }
+    .header h1 {
+        font-size: 1.8rem;
+    }
 
-/* Badge Stato */
-.badge { display: inline-block; padding: .35em .65em; font-size: .75em; font-weight: 700; line-height: 1; color: #fff; text-align: center; white-space: nowrap; vertical-align: baseline; border-radius: .25rem; }
-.bg-primary { background-color: #0d6efd !important; }
-.bg-secondary { background-color: #6c757d !important; }
-.bg-success { background-color: #198754 !important; }
-.bg-danger { background-color: #dc3545 !important; }
-.bg-warning { background-color: #ffc107 !important; }
-.text-dark { color: #212529 !important; }
+    .card {
+        border: 1px solid #e0e0e0;
+        border-radius: 0.75rem;
+        margin-bottom: 1rem;
+        background-color: #fff;
+    }
 
-/* Lista Articoli - Stile semplice con bordi */
-.article-list-container { padding: 0; } /* Rimuovi padding se c'era */
-.article-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center; /* Allinea verticalmente */
-    padding: 1rem;
-    border-bottom: 1px solid #eee;
-}
-.article-list-container .article-row:last-child {
-    border-bottom: none;
-}
-.article-info {
-    flex-grow: 1; /* Occupa spazio disponibile */
-    padding-right: 1rem;
-}
-.article-description {
-    font-weight: 500; /* Leggermente bold */
-    margin: 0 0 4px 0;
-    color: var(--primary-text-color);
-}
-.article-code-simple { /* Nome classe diverso per evitare conflitti */
-    font-size: 0.85rem;
-    color: var(--secondary-text-color);
-    margin: 0;
-}
-.article-quantity {
-    font-size: 1.2rem; /* Dimensione quantità */
-    font-weight: 600;
-    text-align: right;
-    min-width: 80px; /* Larghezza minima */
-    color: var(--primary-text-color);
-}
-.article-quantity small {
-     font-size: 0.75rem;
-     font-weight: 400;
-}
-/* Stile riga completata semplice */
-.picked-complete-simple {
-     background-color: #e6ffed; /* Sfondo verde chiaro */
-     /* Rimosso bordo sinistro per semplicità */
-}
-.picked-complete-simple .article-description {
-     text-decoration: line-through; /* Opzionale: barra nome */
-}
+    .card-header {
+        background-color: #f8f9fa;
+        font-weight: 600;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #e0e0e0;
+    }
 
-/* Feedback Scanner */
-#scan-message { /* Stile base invariato */
-    padding: 0.75rem 1.25rem; border: 1px solid transparent; border-radius: 0.25rem;
-    margin-top: 0.75rem; text-align: center; font-weight: 500;
-}
-#scan-message:empty { display: none; }
-#scan-message.text-success { color: #0f5132; background-color: #d1e7dd; border-color: #badbcc; }
-#scan-message.text-danger { color: #842029; background-color: #f8d7da; border-color: #f5c2c7; }
-#scan-message.text-warning { color: #664d03; background-color: #fff3cd; border-color: #ffecb5; }
-#scan-message.text-info { color: #055160; background-color: #cff4fc; border-color: #b6effb; }
+    .card-body {
+        padding: 1rem;
+    }
 
-/* Footer Azioni Semplice */
-.action-footer-simple {
-    padding: 1rem;
-    background-color: #f8f9fa; /* Grigio chiaro */
-    border-top: 1px solid #e0e0e0;
-    text-align: center; /* Centra contenuto per stato controllo/completato */
-}
-.action-footer-simple .form-label { font-weight: 500; }
+    .card-footer {
+        padding: 0.75rem 1rem;
+        background-color: #f8f9fa;
+        border-top: 1px solid #e0e0e0;
+    }
 
-/* Stili base Bootstrap usati */
-.btn { display: inline-block; font-weight: 400; line-height: 1.5; color: #212529; text-align: center; text-decoration: none; vertical-align: middle; cursor: pointer; user-select: none; background-color: transparent; border: 1px solid transparent; padding: .375rem .75rem; font-size: 1rem; border-radius: .25rem; transition: all .15s ease-in-out; }
-.btn-primary { color: #fff; background-color: #0d6efd; border-color: #0d6efd; }
-.btn-secondary { color: #fff; background-color: #6c757d; border-color: #6c757d; }
-.btn-outline-secondary { color: #6c757d; border-color: #6c757d; background-color: transparent;}
-.btn-outline-secondary:hover { color: #fff; background-color: #6c757d; border-color: #6c757d;}
-.btn-success { color: #fff; background-color: #198754; border-color: #198754; }
-.btn-danger { color: #fff; background-color: #dc3545; border-color: #dc3545; }
-.btn-lg { padding: .5rem 1rem; font-size: 1.25rem; border-radius: .3rem; }
-.w-100 { width: 100% !important; }
-.mb-0 { margin-bottom: 0 !important; }
-.mb-1 { margin-bottom: .25rem !important; }
-.mb-2 { margin-bottom: .5rem !important; }
-.mb-3 { margin-bottom: 1rem !important; }
-.mt-2 { margin-top: .5rem !important; }
-.p-3 { padding: 1rem !important; }
-.px-4 { padding-right: 1.5rem !important; padding-left: 1.5rem !important; }
-.text-center { text-align: center !important; }
-.text-muted { color: #6c757d !important; }
-.fw-bold { font-weight: 700 !important; }
-.fs-5 { font-size: 1.25rem !important; }
-.d-block { display: block !important; }
-.d-flex { display: flex !important; }
-.gap-2 { gap: .5rem !important; }
-.justify-content-center { justify-content: center !important; }
-.align-items-center { align-items: center !important; }
-.form-control { display: block; width: 100%; padding: .375rem .75rem; font-size: 1rem; font-weight: 400; line-height: 1.5; color: #212529; background-color: #fff; background-clip: padding-box; border: 1px solid #ced4da; appearance: none; border-radius: .25rem; transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out; }
-.form-control-lg { min-height: calc(1.5em + 1rem + 2px); padding: .5rem 1rem; font-size: 1.25rem; border-radius: .3rem; }
-.form-label { margin-bottom: .5rem; }
-.alert { position: relative; padding: 1rem 1rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
-.alert-success { color: #0f5132; background-color: #d1e7dd; border-color: #badbcc; }
-.flex-shrink-0 { flex-shrink: 0 !important; }
-.me-2 { margin-right: .5rem !important; }
+    .badge {
+        display: inline-block;
+        padding: .35em .65em;
+        font-size: .75em;
+        font-weight: 700;
+        line-height: 1;
+        color: #fff;
+        text-align: center;
+        white-space: nowrap;
+        vertical-align: baseline;
+        border-radius: .25rem;
+    }
 
+    .status-badge {
+        font-size: 0.9em;
+        padding: 0.4em 0.7em;
+        vertical-align: middle;
+    }
+
+    .status-picking {
+        background-color: #0d6efd;
+        color: white;
+    }
+
+    .status-controllo {
+        background-color: #ffc107;
+        color: #333;
+    }
+
+    .status-completato {
+        background-color: #198754;
+        color: white;
+    }
+
+    .status-default {
+        background-color: #6c757d;
+        color: white;
+    }
+
+    .bg-primary {
+        background-color: #0d6efd !important;
+    }
+
+    .bg-secondary {
+        background-color: #6c757d !important;
+    }
+
+    .bg-success {
+        background-color: #198754 !important;
+    }
+
+    .bg-danger {
+        background-color: #dc3545 !important;
+    }
+
+    .bg-warning {
+        background-color: #ffc107 !important;
+    }
+
+    .bg-light {
+        background-color: #f8f9fa !important;
+    }
+
+    .text-dark {
+        color: #212529 !important;
+    }
+
+    .text-success {
+        color: #198754 !important;
+    }
+
+    .text-danger {
+        color: #dc3545 !important;
+    }
+
+    .text-muted {
+        color: #6c757d !important;
+    }
+
+    /* Lista Articoli (Tab 1: Rimanenti) */
+    .article-list-container {
+        padding: 0;
+    }
+
+    .article-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #eee;
+    }
+
+    .article-list-container .article-row:last-child {
+        border-bottom: none;
+    }
+
+    .article-info {
+        flex-grow: 1;
+        padding-right: 1rem;
+    }
+
+    .article-description {
+        font-weight: 500;
+        margin: 0 0 2px 0;
+        font-size: 0.95em;
+    }
+
+    .article-code-simple {
+        font-size: 0.8em;
+        color: var(--secondary-text-color);
+        margin: 0;
+    }
+
+    .article-info small {
+        font-size: 0.75em;
+    }
+
+    .remaining-quantity {
+        text-align: right;
+        min-width: 80px;
+    }
+
+    .remaining-qty-badge {
+        font-size: 1rem;
+        font-weight: 600;
+        padding: 0.4em 0.7em;
+        min-width: 60px;
+        display: inline-block;
+    }
+
+    .remaining-unit-label {
+        font-size: 0.8em;
+        color: var(--secondary-text-color);
+        margin-left: 3px;
+    }
+
+    .picked-complete-simple {
+        background-color: #e6ffed !important;
+        opacity: 0.6;
+    }
+
+    .picked-complete-simple .article-description {
+        text-decoration: line-through;
+    }
+
+    /* Feedback Scanner */
+    #scan-message {
+        padding: 0.75rem 1.25rem;
+        border: 1px solid transparent;
+        border-radius: 0.25rem;
+        margin-top: 0.75rem;
+        text-align: center;
+        font-weight: 500;
+    }
+
+    #scan-message:empty {
+        display: none;
+    }
+
+    #scan-message.text-success {
+        color: #0f5132;
+        background-color: #d1e7dd;
+        border-color: #badbcc;
+    }
+
+    #scan-message.text-danger {
+        color: #842029;
+        background-color: #f8d7da;
+        border-color: #f5c2c7;
+    }
+
+    #scan-message.text-warning {
+        color: #664d03;
+        background-color: #fff3cd;
+        border-color: #ffecb5;
+    }
+
+    #scan-message.text-info {
+        color: #055160;
+        background-color: #cff4fc;
+        border-color: #b6effb;
+    }
+
+    /* Footer Azioni */
+    .action-footer-simple {
+        padding: 1rem;
+        background-color: #f8f9fa;
+        border-top: 1px solid #e0e0e0;
+        text-align: center;
+    }
+
+    .action-footer-simple .form-label {
+        font-weight: 500;
+    }
+
+    /* Stili Packing List (Tab 2) */
+    .packing-list-container {
+        padding: 0;
+    }
+
+    .collo-header {
+        padding: 0.75rem 1rem;
+        background-color: #f8f9fa;
+        border-bottom: 1px solid #dee2e6;
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .collo-header.active {
+        /* Collo attivo */
+        background-color: #dbeafe;
+        border-left: 5px solid var(--accent-color);
+        padding-left: 0.75rem;
+    }
+
+    .collo-item-list {
+        padding: 0;
+        margin: 0;
+    }
+
+    .collo-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem 0.5rem 1.5rem;
+        /* Indentato */
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 0.9em;
+    }
+
+    .collo-item:last-child {
+        border-bottom: none;
+    }
+
+    .collo-item-details {
+        flex-grow: 1;
+        padding-right: 1rem;
+    }
+
+    .collo-item-desc {
+        font-weight: 500;
+    }
+
+    .collo-item-code {
+        font-size: 0.9em;
+        color: var(--secondary-text-color);
+    }
+
+    /* --- STILE STEPPER (+/-) --- */
+    .collo-item-stepper {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .collo-item-qty {
+        font-weight: 700;
+        font-size: 1.1em;
+        min-width: 20px;
+        text-align: center;
+    }
+
+    .collo-item-adjust-btn {
+        padding: 0.1rem 0.4rem;
+        line-height: 1;
+        border-radius: 50%;
+        /* Bottoni tondi */
+        width: 28px;
+        height: 28px;
+        font-size: 0.8rem;
+        border-width: 1px;
+    }
+
+    /* Stile per Quantità in stato non-picking */
+    .collo-item-qty-static {
+        font-weight: 700;
+        font-size: 1.1em;
+        padding: 0 0.5rem;
+        color: var(--primary-text-color);
+    }
+
+    /* --- FINE STILE STEPPER --- */
+
+    /* Stili Tab */
+    .nav-tabs {
+        border-bottom: 1px solid #dee2e6;
+    }
+
+    .nav-link {
+        border: 1px solid transparent;
+        border-top-left-radius: .25rem;
+        border-top-right-radius: .25rem;
+        color: var(--accent-color);
+        cursor: pointer;
+    }
+
+    .nav-link.active {
+        color: #495057;
+        background-color: #fff;
+        border-color: #dee2e6 #dee2e6 #fff;
+    }
 </style>
 
-<!-- JAVASCRIPT (INVARIATO DALLA VERSIONE PRECEDENTE CON URL CORRETTO) -->
-{% if state.status == 'In Picking' %}
+{# --- JAVASCRIPT CON STEPPER --- #}
+{% block scripts_extra %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const scannerInput = document.getElementById('barcode-scanner');
-    const scanMessageDiv = document.getElementById('scan-message');
-    const apiUrl = `/api/scan-barcode/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}`;
-    console.log("API URL per scansione (effettivo):", apiUrl);
+    document.addEventListener('DOMContentLoaded', function () {
+        if (window.pickingPageInitialized) {
+            console.warn("Script di picking già inizializzato. Blocco la seconda esecuzione.");
+            return;
+        }
+        window.pickingPageInitialized = true;
+        // Riferimenti Globali
+        const scannerInput = document.getElementById('barcode-scanner');
+        const scanMessageDiv = document.getElementById('scan-message');
+        const addColloBtn = document.getElementById('add-collo-btn');
+        const activeColloDisplay = document.getElementById('active-collo-display');
+        const remainingListDiv = document.getElementById('remaining-items-list');
+        const packingListDiv = document.getElementById('packing-list-summary');
+        const colliTotaliInput = document.getElementById('colli_totali_operatore');
 
+        // URL API
+        const scanApiUrlBase = `/api/scan-barcode/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}`;
+        const createColloApiUrl = `/api/order/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}/collo/create`;
+        const removeItemApiUrlBase = `/api/order/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}/collo`; // ... /{collo_id}/item/remove
+
+        // Dati di Stato JS (letti dal server all'avvio)
+        let state = {
+            packing_list: {{ state.packing_list | tojson | safe
+    }},
+        picked_items: {{ state.picked_items | tojson | safe }}
+    };
+    const orderRows = {{ order.righe | tojson | safe }};
+    const orderStatus = "{{ state.status }}";
+
+    // Trova l'ID collo attivo più recente
+    let activeColloId = state.packing_list.length > 0 ? state.packing_list[state.packing_list.length - 1].collo_id : null;
+
+    // Inizializza UI al caricamento
+    updateRemainingItemsUI();
+    updatePackingListUI();
+    updateActiveColloUI();
+
+    // --- GESTIONE AUDIO ---
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     function playBeep(type = 'success') {
         try {
@@ -273,111 +560,387 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             oscillator.start(audioContext.currentTime);
             oscillator.stop(audioContext.currentTime + 0.15);
-        } catch (e) { console.error("AudioContext non supportato o errore:", e); }
+        } catch (e) { console.error("Audio beep fallito:", e); }
     }
 
+    // --- GESTIONE SCANNER ---
     if (scannerInput) {
         scannerInput.focus();
-        scannerInput.addEventListener('keypress', function(e) {
+        scannerInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter' || e.keyCode === 13) {
                 e.preventDefault();
                 const barcode = scannerInput.value.trim();
                 if (barcode === '') return;
-                handleBarcodeScan(barcode);
+                // Lo scanner chiama la funzione 'add' (passando il barcode)
+                handleItemAdjustment(activeColloId, null, 'add', barcode);
             }
         });
     }
 
-    async function handleBarcodeScan(barcode) {
-        showScanFeedback('Verifica barcode...', 'info');
+    // --- GESTIONE BOTTONE "AGGIUNGI COLLO" ---
+    if (addColloBtn) {
+        addColloBtn.addEventListener('click', async () => {
+            showScanFeedback('Creazione nuovo collo...', 'info');
+            try {
+                const response = await fetch(createColloApiUrl, { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') {
+                    throw new Error(data.message || 'Errore creazione collo');
+                }
+
+                state.packing_list = data.packing_list;
+                activeColloId = data.new_collo_id;
+
+                updatePackingListUI();
+                updateActiveColloUI();
+                showScanFeedback(`Creato Collo ${activeColloId}. Ora è attivo.`, 'success');
+                if (scannerInput) scannerInput.focus();
+
+            } catch (err) {
+                console.error('Errore Creazione Collo:', err);
+                showScanFeedback(err.message, 'danger');
+            }
+        });
+    }
+
+    // --- GESTIONE STEPPER +/- E "IMPOSTA ATTIVO" (Delegata) ---
+    packingListDiv.addEventListener('click', function (e) {
+        // Cerca il bottone cliccato
+        const adjustButton = e.target.closest('.collo-item-adjust-btn');
+        if (adjustButton && orderStatus === 'In Picking') { // Controlla stato
+            const colloId = parseInt(adjustButton.getAttribute('data-collo-id'));
+            const articleCode = adjustButton.getAttribute('data-article-code');
+            const action = adjustButton.getAttribute('data-action'); // 'add' o 'remove'
+
+            if (!colloId || !articleCode || !action) return;
+
+            // Imposta questo collo come attivo (utile se si clicca +/- su un collo non attivo)
+            if (activeColloId !== colloId) {
+                activeColloId = colloId;
+                updateActiveColloUI();
+                // updatePackingListUI(); // Non serve ridisegnare, lo fa handleItemAdjustment
+            }
+
+            // Chiama la funzione di aggiunta/rimozione (passando l'articleCode)
+            handleItemAdjustment(colloId, articleCode, action, null);
+            return; // Evento gestito
+        }
+
+        // Gestisci click su "Imposta Attivo"
+        const setActiveButton = e.target.closest('.set-active-collo-btn');
+        if (setActiveButton) {
+            activeColloId = parseInt(setActiveButton.getAttribute('data-collo-id'));
+            updateActiveColloUI();
+            updatePackingListUI(); // Ridisegna per mostrare stato attivo
+            if (scannerInput) scannerInput.focus();
+            return; // Evento gestito
+        }
+    });
+
+    remainingListDiv.addEventListener('click', function (e) {
+        // Cerca il bottone cliccato
+        const adjustButton = e.target.closest('.collo-item-adjust-btn');
+        if (adjustButton && orderStatus === 'In Picking') { // Controlla stato
+
+            // CONTROLLO FONDAMENTALE: c'è un collo attivo?
+            if (!activeColloId) {
+                showScanFeedback("Errore: Nessun collo attivo. Clicca 'Aggiungi Collo' prima.", 'danger');
+                playBeep('error');
+                return;
+            }
+
+            const articleCode = adjustButton.getAttribute('data-article-code');
+            const action = adjustButton.getAttribute('data-action'); // 'add' o 'remove'
+
+            if (!articleCode || !action) return;
+
+            // Chiama la stessa funzione di prima, usando il collo attivo globale
+            handleItemAdjustment(activeColloId, articleCode, action, null);
+            return; // Evento gestito
+        }
+    });
+
+    // --- FUNZIONE UNIFICATA per Scansione (+) e Stepper (+/-) ---
+    async function handleItemAdjustment(colloId, articleCode, action, barcode = null) {
+        // Blocco scansione se nessun collo è attivo
+        if (!colloId && action === 'add') {
+            showScanFeedback("Errore: Nessun collo attivo. Clicca 'Aggiungi Collo'.", 'danger');
+            playBeep('error');
+            if (scannerInput) { scannerInput.value = ''; scannerInput.focus(); }
+            return;
+        }
+
+        let apiUrl = '';
+        let body = {};
+
+        if (action === 'add') {
+            if (barcode) {
+                // Caso 1: Scansione da scanner (usa il vecchio URL)
+                apiUrl = `${scanApiUrlBase}/collo/${colloId}`;
+                body = JSON.stringify({ barcode: barcode });
+                showScanFeedback(`Scansione ${barcode} in Collo ${colloId}...`, 'info');
+            } else if (articleCode) {
+                // Caso 2: Click su bottone "+" (usa il nuovo URL 'add')
+                // Usiamo la stessa base URL del 'remove'
+                apiUrl = `${removeItemApiUrlBase}/${colloId}/item/add`; // <-- QUESTA È LA CORREZIONE
+                body = JSON.stringify({ article_code: articleCode });
+                showScanFeedback(`Aggiungo 1 pz di ${articleCode} a Collo ${colloId}...`, 'info');
+            } else {
+                return; // Invalido
+            }
+
+        } else if (action === 'remove') {
+            // Caso 3: Click su bottone "-" (era già corretto)
+            apiUrl = `${removeItemApiUrlBase}/${colloId}/item/remove`;
+            body = JSON.stringify({ article_code: articleCode });
+            showScanFeedback(`Rimuovo 1 pz di ${articleCode} da Collo ${colloId}...`, 'info');
+        } else {
+            return; // Azione non riconosciuta
+        }
+
         try {
             const response = await fetch(apiUrl, {
                 method: 'POST',
-                body: JSON.stringify({ barcode: barcode }),
+                body: body,
                 headers: { 'Content-Type': 'application/json' }
             });
 
             if (!response.ok) {
-                 let errorMessage = `Errore HTTP ${response.status}: ${response.statusText}`;
-                 try { const errData = await response.json(); errorMessage = errData.message || errorMessage; } catch (jsonError) { /* ignore */ }
-                 console.error("Errore risposta Fetch:", response.status, response.statusText);
-                 throw new Error(errorMessage);
+                let errorMessage = `Errore HTTP ${response.status}: ${response.statusText}`;
+                try { const errData = await response.json(); errorMessage = errData.message || errorMessage; } catch (jsonError) { /* ignore */ }
+                console.error("Errore risposta Fetch:", response.status, response.statusText);
+                throw new Error(errorMessage);
             }
-            const data = await response.json();
-            console.log("API Response:", data);
 
-            if (data.status === 'success' && data.item) {
-                showScanFeedback(`OK: ${data.item.codice_articolo} (${data.item.qta_prelevata}/${data.item.qta_ordinata})`, 'success');
-                playBeep('success');
-                updateRowUI(data.item.id_riga, data.item.qta_prelevata, data.item.qta_ordinata);
-            } else if (data.status === 'already_picked') {
-                showScanFeedback(`${data.message}`, 'warning');
-                playBeep('warning');
-            } else if (data.status === 'item_not_in_order' || data.status === 'not_found') {
-                 showScanFeedback(`❌ ${data.message}`, 'danger');
-                 playBeep('error');
+            const data = await response.json();
+            console.log(`API ${action} Response:`, data);
+
+            // Se l'API risponde con successo (include i nuovi stati)
+            if (data.status && data.status.startsWith('success') || data.status === 'warning_overpick') {
+                // Aggiorna stato locale JS
+                state.packing_list = data.packing_list;
+                state.picked_items = data.picked_items;
+                // Aggiorna entrambe le sezioni UI
+                updatePackingListUI();
+                updateRemainingItemsUI();
+
+                showScanFeedback(data.message, data.status.startsWith('warning') ? 'warning' : 'success');
+                playBeep(data.status.startsWith('warning') ? 'warning' : 'success');
+
             } else {
-                 showScanFeedback(`❌ Errore: ${data.message || 'Risposta non valida dal server'}`, 'danger');
-                 playBeep('error');
+                // Gestione errori JSON (not_found, item_not_in_order, etc.)
+                showScanFeedback(`❌ ${data.message}`, 'danger');
+                playBeep('error');
             }
         } catch (err) {
-            console.error('Fetch Error o Errore Risposta:', err);
+            console.error(`Fetch Error (Action: ${action}):`, err);
             showScanFeedback(`Errore: ${err.message}`, 'danger');
             playBeep('error');
         } finally {
-            scannerInput.value = '';
-            scannerInput.focus();
+            if (scannerInput && barcode) { // Pulisci solo se era una scansione
+                scannerInput.value = '';
+            }
+            if (scannerInput) scannerInput.focus();
         }
     }
+
+    // --- FUNZIONI DI AGGIORNAMENTO UI ---
 
     function showScanFeedback(message, type = 'info') {
         if (!scanMessageDiv) return;
         scanMessageDiv.textContent = message;
-        scanMessageDiv.className = `text-${type} mt-2`;
+        scanMessageDiv.className = `mt-2 text-${type}`;
+        if (type === 'success') { scanMessageDiv.style.color = 'var(--success-color)'; }
+        else if (type === 'danger') { scanMessageDiv.style.color = 'var(--danger-color)'; }
+        else if (type === 'warning') { scanMessageDiv.style.color = 'var(--warning-color)'; }
+        else { scanMessageDiv.style.color = 'var(--primary-text-color)'; }
+
         setTimeout(() => {
             if (scanMessageDiv.textContent === message) {
-               scanMessageDiv.textContent = '';
-               scanMessageDiv.className = 'mt-2';
+                scanMessageDiv.textContent = '';
+                scanMessageDiv.style.color = '';
             }
         }, 5000);
     }
 
-    function updateRowUI(rowId, pickedQtyStr, orderedQtyStr) {
-        const rowElement = document.getElementById(`order-row-${rowId}`);
-        if (!rowElement) { console.warn(`Elemento riga non trovato per ID: ${rowId}`); return; }
-        const pickedQtySpan = rowElement.querySelector('.picked-qty');
-        const orderedQtySpan = rowElement.querySelector('.ordered-qty'); // Potremmo usarlo per riferimento
-        const quantityContainer = rowElement.querySelector('.article-quantity span:first-child'); // Seleziona il contenitore della quantità
-
-        const pickedQty = parseFloat(String(pickedQtyStr).replace(',', '.')) || 0;
-        const orderedQty = parseFloat(String(orderedQtyStr).replace(',', '.')) || 0;
-
-        if (pickedQtySpan && orderedQtySpan) {
-             // Aggiorna solo la quantità prelevata
-            pickedQtySpan.textContent = Math.round(pickedQty);
-            // La quantità ordinata non dovrebbe cambiare
-            orderedQtySpan.textContent = Math.round(orderedQty);
-        }
-
-        // Aggiorna stile riga e badge quantità
-        if (orderedQty > 0 && pickedQty >= orderedQty) {
-            rowElement.classList.add('picked-complete-simple');
-            if(quantityContainer) { // Cambia stile del contenitore quantità
-                 quantityContainer.classList.remove('text-dark'); // Assumendo che non ci sia bg-light qui
-                 quantityContainer.classList.add('text-success', 'fw-bold');
-            }
+    // Aggiorna il badge "Collo Attivo: X"
+    function updateActiveColloUI() {
+        if (!activeColloDisplay) return;
+        if (activeColloId && orderStatus === 'In Picking') {
+            activeColloDisplay.textContent = `Collo ${activeColloId}`;
+            activeColloDisplay.className = 'badge bg-primary';
+        } else if (orderStatus !== 'In Picking') {
+            activeColloDisplay.textContent = '-';
+            activeColloDisplay.className = 'badge bg-secondary';
         } else {
-            rowElement.classList.remove('picked-complete-simple');
-             if(quantityContainer) { // Ripristina stile
-                 quantityContainer.classList.remove('text-success', 'fw-bold');
-                 quantityContainer.classList.add('text-dark'); // O il colore di default
-            }
+            activeColloDisplay.textContent = 'Nessuno';
+            activeColloDisplay.className = 'badge bg-secondary';
         }
     }
+
+    // Aggiorna la TAB "Rimanenti da Prelevare"
+    function updateRemainingItemsUI() {
+        if (!remainingListDiv) return;
+        remainingListDiv.innerHTML = '';
+
+        if (!orderRows || orderRows.length === 0) {
+            remainingListDiv.innerHTML = '<p class="text-center text-muted p-3">Nessun articolo in questo ordine.</p>';
+            return;
+        }
+
+        orderRows.forEach(item => {
+            const row_id = String(item.id_riga);
+
+            // Calcola qta target (Pezzi Totali) - Logica copiata dal template
+            let nr_colli_val = 0.0;
+            if (item.nr_colli !== null && item.nr_colli !== '') { try { nr_colli_val = parseFloat(String(item.nr_colli).replace(',', '.')); } catch (e) { } }
+            let quantita_per_collo_val = 0.0;
+            if (item.quantita !== null && item.quantita !== '') { try { quantita_per_collo_val = parseFloat(String(item.quantita).replace(',', '.')); } catch (e) { } }
+            let qta_target = (nr_colli_val > 0) ? (nr_colli_val * quantita_per_collo_val) : quantita_per_collo_val;
+            qta_target = Math.round(qta_target);
+
+            // Leggi qta prelevata (Pezzi Totali) dal riepilogo 'state.picked_items'
+            const qta_prelevata = Math.round(parseFloat(state.picked_items ? (state.picked_items[row_id] || 0) : 0));
+            const qta_rimanente = qta_target - qta_prelevata;
+
+            const is_complete = (qta_target > 0 && qta_prelevata >= qta_target);
+
+            // Costruisci HTML riga
+            let rowHTML = `
+                <div class="article-row ${is_complete ? 'picked-complete-simple' : ''}" id="remaining-row-${row_id}">
+                    <div class="article-info">
+                        <p class="article-description">${item.descr_articolo || 'N/D'}</p>
+                        <p class="article-code-simple">Cod: ${item.codice_articolo}</p>
+                        ${(nr_colli_val > 0 && quantita_per_collo_val > 0) ?
+                    `<small class="d-block text-muted">${Math.round(nr_colli_val)} x ${quantita_per_collo_val.toFixed(2)} pz</small>` : ''
+                }
+                    </div>
+                    <div class="remaining-quantity" style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+    
+    <div>
+        <span class="badge remaining-qty-badge ${is_complete ? 'bg-success' : (qta_prelevata > 0 ? 'bg-warning text-dark' : 'bg-light text-dark')}">
+            <span class="picked-qty">${qta_prelevata}</span> / <span class="ordered-qty">${qta_target}</span>
+        </span>
+        <span class="remaining-unit-label">Pz</span>
+    </div>
+
+    ${(orderStatus === 'In Picking') ? `
+    <div class="collo-item-stepper">
+        <button type="button" class="btn btn-sm btn-outline-danger collo-item-adjust-btn"
+                data-article-code="${item.codice_articolo}"
+                data-action="remove" title="Rimuovi 1 da collo attivo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-dash-lg" viewBox="0 0 16 16" style="pointer-events: none;">
+                <path fill-rule="evenodd" d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8z"/>
+            </svg>
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-success collo-item-adjust-btn"
+                data-article-code="${item.codice_articolo}"
+                data-action="add" title="Aggiungi 1 a collo attivo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-plus-lg" viewBox="0 0 16 16" style="pointer-events: none;">
+                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/>
+            </svg>
+        </button>
+    </div>
+    ` : `
+    ${(qta_rimanente > 0) ?
+                    `<small class="d-block text-danger fw-bold">Rest: ${qta_rimanente}</small>` :
+                    (is_complete ? `<small class="d-block text-success fw-bold">OK</small>` : '')
+                }
+    `}
+</div>
+                </div>
+            `;
+            remainingListDiv.innerHTML += rowHTML;
+        });
+    }
+
+    // Aggiorna la TAB "Packing List (Colli)"
+    function updatePackingListUI() {
+        if (!packingListDiv) return;
+        packingListDiv.innerHTML = '';
+
+        if (colliTotaliInput) colliTotaliInput.value = state.packing_list.length;
+        if (!state.packing_list || state.packing_list.length === 0) {
+            packingListDiv.innerHTML = '<p class="text-center text-muted p-3">Clicca "Aggiungi Collo" per iniziare.</p>';
+            return;
+        }
+
+        const sortedPackingList = [...state.packing_list].sort((a, b) => a.collo_id - b.collo_id);
+
+        sortedPackingList.forEach(collo => {
+            const collo_id = collo.collo_id;
+            const items = collo.items || {};
+            const isActive = (collo_id === activeColloId);
+
+            let itemsHTML = '';
+            if (Object.keys(items).length === 0) {
+                itemsHTML = '<li class="collo-item text-muted">(Collo vuoto)</li>';
+            } else {
+                const sortedItems = Object.entries(items).sort((a, b) => a[0].localeCompare(b[0]));
+
+                for (const [articleCode, qta] of sortedItems) {
+                    const itemInfo = orderRows.find(r => r.codice_articolo === articleCode);
+                    const desc = itemInfo ? itemInfo.descr_articolo : 'Articolo Sconosciuto';
+
+                    // --- HTML MODIFICATO CON STEPPER ---
+                    itemsHTML += `
+                        <li class="collo-item">
+                            <div class="collo-item-details">
+                                <span class="collo-item-desc">${desc}</span>
+                                <small class="collo-item-code d-block">Cod: ${articleCode}</small>
+                            </div>
+                            
+                            ${(orderStatus === 'In Picking') ? `
+                            <div class="collo-item-stepper">
+                                <button type="button" class="btn btn-sm btn-outline-danger collo-item-adjust-btn"
+                                        data-collo-id="${collo_id}"
+                                        data-article-code="${articleCode}"
+                                        data-action="remove" title="Rimuovi 1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-dash-lg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8z"/></svg>
+                                </button>
+                                <span class="collo-item-qty">${Math.round(qta)}</span>
+                                <button type="button" class="btn btn-sm btn-outline-success collo-item-adjust-btn"
+                                        data-collo-id="${collo_id}"
+                                        data-article-code="${articleCode}"
+                                        data-action="add" title="Aggiungi 1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-plus-lg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/></svg>
+                                </button>
+                            </div>
+                            ` : `
+                            <div class="collo-item-qty-static">
+                                 ${Math.round(qta)} pz
+                            </div>
+                            `}
+                        </li>
+                    `;
+                    // --- FINE HTML MODIFICATO ---
+                }
+            }
+
+            const setColloActiveBtn = (orderStatus === 'In Picking' && !isActive) ?
+                `<button class="btn btn-sm btn-outline-primary set-active-collo-btn" data-collo-id="${collo_id}">Imposta Attivo</button>` : '';
+
+            let colloHTML = `
+                <div class="collo-container mb-2">
+                    <div class="collo-header ${isActive ? 'active' : ''}">
+                        <span>Collo ${collo_id}</span>
+                        ${setColloActiveBtn}
+                    </div>
+                    <ul class="collo-item-list list-group list-group-flush">
+                        ${itemsHTML}
+                    </ul>
+                </div>
+            `;
+            packingListDiv.innerHTML += colloHTML;
+        });
+
+        // (Spostato il listener fuori da questa funzione, vedi sopra)
+    }
+
+    // Assicurati che gli stili Bootstrap base (come btn-sm, form-control-sm) siano definiti
+    // (Sono già nel blocco <style> sopra)
+
 });
 </script>
-{% endif %}
-<!-- FINE JAVASCRIPT -->
-
 {% endblock %}
-
+{% endblock %}
