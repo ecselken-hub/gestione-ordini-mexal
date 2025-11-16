@@ -30,6 +30,15 @@ load_dotenv()
 
 app = Flask(__name__)
 
+class PDF(FPDF):
+    def footer(self):
+        # Va 1.5 cm dal fondo
+        self.set_y(-15)
+        # Seleziona Arial corsivo 8
+        self.set_font("Arial", "I", 8)
+        # Stampa 'Pagina X / Y' centrato
+        self.cell(0, 10, f"Pagina {self.page_no()}/{{nb}}", 0, 0, "C")
+
 
 # --- CORREZIONE 7: Raccomandazione per SECRET_KEY ---
 # NOTA: Per produzione, sposta SECRET_KEY in una variabile d'ambiente!
@@ -1174,7 +1183,6 @@ def end_consegna():
     return redirect(url_for('consegne_autista', autista_nome=autista_nome_form))
 
 
-# --- Funzione Calcolo Riepilogo Admin (con Lock interno) ---
 def _calculate_admin_summary_data():
     """
     Calcola statistiche riassuntive per la dashboard admin.
@@ -1193,44 +1201,41 @@ def _calculate_admin_summary_data():
     consegne_totali_in_corso = 0
     tempo_totale_effettivo_sec = 0
     km_totali_previsti = 0.0
-    consegne_per_ora = defaultdict(int) # Es: {9: 2, 10: 5, ...}
+    consegne_per_ora = defaultdict(int)
 
-    # Itera sugli eventi per trovare consegne in corso o completate
-    for order_key, evento in delivery_events_copy.items():
-        logistic_info = logistics_copy.get(order_key)
-        # Salta se non è un dict o manca il nome
+    # Itera su TUTTE le assegnazioni logistiche
+    for order_key, logistic_info in logistics_copy.items():
         if not isinstance(logistic_info, dict) or not logistic_info.get('nome'):
             continue
         autista_nome = logistic_info['nome']
+        evento = delivery_events_copy.get(order_key, {}) # Evento (può essere vuoto)
 
-        # Inizializza struttura per autista se non esiste
         if autista_nome not in dettagli_per_autista:
              giro_pianificato = calculated_routes_copy.get(autista_nome, {})
              dettagli_per_autista[autista_nome] = {
-                 'summary': dict(giro_pianificato), # Copia summary
-                 'consegne': [], # Lista consegne per questo autista
-                 'tempo_effettivo_sec': 0 # Tempo totale consegne completate
+                 'summary': dict(giro_pianificato),
+                 'consegne': [],
+                 'tempo_effettivo_sec': 0
              }
 
         ordine = orders_copy.get(order_key)
-        if not ordine: continue # Salta se l'ordine non è più nella cache
+        if not ordine: continue
 
         status_consegna = "Assegnata"
         durata_effettiva_str = "-"
-        ora_inizio = -1 # Ora intera per grafico
+        ora_inizio = -1
 
         start_time_str = evento.get('start_time')
         end_time_str = evento.get('end_time')
 
         if start_time_str:
             status_consegna = "In Corso"
-            if not end_time_str: # Conta solo se non ancora completata
+            if not end_time_str:
                 consegne_totali_in_corso += 1
             try:
-                # Arrotonda all'ora per il grafico
                 start_dt = datetime.strptime(start_time_str, '%H:%M:%S')
                 ora_inizio = start_dt.hour
-            except (ValueError, TypeError): pass # Ignora se formato ora non valido
+            except (ValueError, TypeError): pass
 
         if start_time_str and end_time_str:
             status_consegna = "Completata"
@@ -1240,44 +1245,42 @@ def _calculate_admin_summary_data():
                 end_dt = datetime.strptime(end_time_str, '%H:%M:%S')
                 durata_td = end_dt - start_dt
                 durata_sec = durata_td.total_seconds()
-                if durata_sec < 0: durata_sec += 24 * 3600 # Gestisce cambio giorno
+                if durata_sec < 0: durata_sec += 24 * 3600
                 dettagli_per_autista[autista_nome]['tempo_effettivo_sec'] += durata_sec
                 tempo_totale_effettivo_sec += durata_sec
                 durata_min = math.ceil(durata_sec / 60)
                 durata_effettiva_str = f"{durata_min} min"
-                # Incrementa contatore per grafico solo se ora inizio valida
                 if ora_inizio != -1: consegne_per_ora[ora_inizio] += 1
             except (ValueError, TypeError) as e:
                 print(f"Errore calcolo durata consegna per {order_key}: {e}")
-                pass # Lascia '-'
+                pass
 
         order_id = str(ordine.get('numero'))
-        status_ordine_picking = statuses_copy.get(order_id, {}) # Stato picking/controllo
+        status_ordine_picking = statuses_copy.get(order_id, {})
 
-        # Aggiungi dettaglio consegna alla lista dell'autista
         dettaglio_consegna = {
             'ragione_sociale': ordine.get('ragione_sociale', 'N/D'),
-            'indirizzo': ordine.get('indirizzo', '-'),
-            'localita': ordine.get('localita', '-'),
+            'indirizzo': ordine.get('indirizzo_effettivo', ordine.get('indirizzo', '-')),
+            'localita': ordine.get('localita_effettiva', ordine.get('localita', '-')),
             'start_time_reale': start_time_str or '-',
             'end_time_reale': end_time_str or '-',
             'durata_effettiva': durata_effettiva_str,
             'colli': status_ordine_picking.get('colli_totali_operatore', 'N/D'),
-            'status': status_consegna # Stato consegna (Assegnata, In Corso, Completata)
+            'status': status_consegna,
+            'pdf_filename': status_ordine_picking.get('pdf_filename')
         }
         dettagli_per_autista[autista_nome]['consegne'].append(dettaglio_consegna)
 
-    # Formatta tempi totali e calcola km totali previsti
+    # Formatta tempi totali e calcola km
     for autista_nome, dettagli in dettagli_per_autista.items():
          tempo_sec = dettagli['tempo_effettivo_sec']
          dettagli['summary']['tempo_totale_reale'] = time.strftime("%Hh %Mm", time.gmtime(tempo_sec)) if tempo_sec > 0 else "0h 0m"
          try:
             giro_pianificato = dettagli.get('summary', {})
-            # Estrai km numerico dal formato "xx.x km"
             km_str = giro_pianificato.get('km_previsti', '0 km').split(' ')[0]
             km_autista = float(km_str) if km_str else 0.0
             km_totali_previsti += km_autista
-         except ValueError: pass # Ignora se km non è numerico
+         except ValueError: pass
 
     # Calcola statistiche generali
     tempo_medio_consegna_str = "-"
@@ -1295,12 +1298,36 @@ def _calculate_admin_summary_data():
         'tempo_medio': tempo_medio_consegna_str
     }
 
-    # Prepara dati per il grafico consegne per ora
-    ore_grafico = list(range(7, 21)) # Fascia oraria 7-20 per il grafico
+    # Prepara dati per il grafico
+    ore_grafico = list(range(7, 21))
     conteggi_grafico = [consegne_per_ora.get(h, 0) for h in ore_grafico]
     chart_data = {'labels': [f"{h}:00" for h in ore_grafico], 'data': conteggi_grafico}
 
-    return summary_stats, dettagli_per_autista, chart_data
+    # --- NUOVA AGGIUNTA: Crea la lista di tutti i PDF ---
+    all_generated_pdfs_list = []
+    for order_id, status_data in statuses_copy.items():
+        if status_data.get('pdf_filename'):
+            # Troviamo il nome del cliente per questo order_id
+            order_key = None
+            client_name = "Cliente Sconosciuto"
+            for key, order in orders_copy.items():
+                if str(order.get('numero')) == order_id:
+                    order_key = key
+                    client_name = order.get('ragione_sociale', 'N/D')
+                    break
+            
+            all_generated_pdfs_list.append({
+                'filename': status_data['pdf_filename'],
+                'client_name': client_name,
+                'order_id': order_id
+            })
+    
+    # Ordina i PDF per nome (che include la data), dal più recente
+    all_generated_pdfs_list.sort(key=lambda x: x['filename'], reverse=True)
+    # --- FINE NUOVA AGGIUNTA ---
+
+    # Restituisce la nuova lista
+    return summary_stats, dettagli_per_autista, chart_data, all_generated_pdfs_list
 
 
 # --- Rotta Amministrazione (Usa _calculate con Lock) ---
@@ -1312,19 +1339,20 @@ def amministrazione():
         flash("Accesso non autorizzato alla pagina amministrazione.", "danger")
         return redirect(url_for('dashboard'))
 
-    # Chiama la funzione helper che ora gestisce il lock internamente
     try:
-        summary_stats, dettagli_per_autista, chart_data = _calculate_admin_summary_data()
+        # Ora riceve 4 valori di ritorno
+        summary_stats, dettagli_per_autista, chart_data, pdf_list = _calculate_admin_summary_data()
     except Exception as e:
          print(f"Errore in _calculate_admin_summary_data: {e}")
          flash("Errore durante il calcolo delle statistiche amministrative.", "danger")
-         summary_stats, dettagli_per_autista, chart_data = {}, {}, {'labels':[], 'data':[]}
+         summary_stats, dettagli_per_autista, chart_data, pdf_list = {}, {}, {'labels':[], 'data':[]}, []
 
 
     return render_template('amministrazione.html',
                            summary_stats=summary_stats,
                            dettagli_per_autista=dettagli_per_autista,
-                           chart_data=chart_data, # Passa dati grafico al template
+                           chart_data=chart_data,
+                           pdf_list=pdf_list,  # <-- Passa la nuova lista al template
                            active_page='amministrazione')
 
 
@@ -1399,7 +1427,7 @@ def _upload_to_dropbox(file_content_bytes, file_name):
         
         # Esegui l'upload, passando i bytes direttamente
         dbx.files_upload(
-            file_content_bytes, # <--- Passa i bytes del PDF
+            bytes(file_content_bytes), # <--- Passa i bytes del PDF
             dropbox_path,
             mode=dropbox.files.WriteMode('overwrite') # 'overwrite' è più sicuro
         )
@@ -1509,41 +1537,47 @@ def order_action(sigla, serie, numero):
 
     # --- FINE Blocco 'with app_data_store_lock' ---
 
-    # --- NUOVA LOGICA: Salvataggio File TXT Dettagliato (Goal 2) ---
-# --- NUOVA LOGICA: Genera PDF con FPDF2 (puro Python) e carica ---
     if picking_data_to_save:
         pdf_bytes = None
         filename = None
         try:
-            # --- 1. Genera la mappa delle descrizioni (invariato) ---
+            # --- 1. Genera la mappa delle descrizioni ---
             desc_map = {
                 item.get('codice_articolo'): item.get('descr_articolo', 'N/D')
                 for item in picking_data_to_save['order_rows']
             }
 
-            # --- 2. Definisci il nome del file (invariato) ---
+            # --- 2. Definisci il nome del file ---
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.pdf"
 
             # --- 3. Genera il PDF con FPDF2 ---
             print(f"DEBUG [complete_picking]: Generazione PDF (fpdf2) per {filename}...")
             
-            pdf = FPDF()
+            pdf = PDF(orientation="P", unit="mm", format="A4")
+            pdf.alias_nb_pages()
             pdf.add_page()
             pdf.set_auto_page_break(auto=True, margin=15)
             
+            COL_W_QTY = 18
+            COL_W_CODE = 42
+            COL_W_DESC = 130
+            
             # Titolo
-            pdf.set_font("Arial", "B", 18)
+            pdf.set_font("Arial", "B", 20)
             pdf.cell(0, 12, "PACKING LIST", border=0, ln=1, align="C")
             pdf.ln(5)
 
             # Info Header
-            pdf.set_font("Arial", size=11)
-            pdf.cell(0, 7, f"Ordine: {picking_data_to_save['order_key']}", ln=1)
-            pdf.cell(0, 7, f"Cliente: {picking_data_to_save['cliente']}", ln=1)
-            pdf.cell(0, 7, f"Operatore: {picking_data_to_save['operatore']}", ln=1)
-            pdf.set_font("Arial", "B", 11)
-            pdf.cell(0, 7, f"COLLI TOTALI DICHIARATI: {picking_data_to_save['colli_totali_dichiarati']}", ln=1)
+            pdf.set_font("Arial", size=10)
+            pdf.cell(95, 6, f"Ordine: {picking_data_to_save['order_key']}", ln=0)
+            pdf.cell(95, 6, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align="R")
+            pdf.cell(0, 6, f"Cliente: {picking_data_to_save['cliente']}", ln=1)
+            pdf.cell(0, 6, f"Operatore: {picking_data_to_save['operatore']}", ln=1)
+            
+            pdf.set_font("Arial", "B", 12)
+            pdf.set_fill_color(240, 240, 240)
+            pdf.cell(0, 8, f"COLLI TOTALI DICHIARATI: {picking_data_to_save['colli_totali_dichiarati']}", ln=1, fill=True, align="C")
             pdf.ln(7)
 
             riepilogo_totale_articoli = defaultdict(float)
@@ -1555,43 +1589,107 @@ def order_action(sigla, serie, numero):
                 items_in_collo = collo.get('items', {})
                 
                 pdf.set_font("Arial", "B", 13)
-                pdf.cell(0, 10, f"--- COLLO {collo_id} ---", border="B", ln=1) # Bordo inferiore
-                pdf.set_font("Arial", size=10)
+                pdf.set_fill_color(230, 230, 230)
+                pdf.cell(0, 10, f"COLLO {collo_id}", border=0, ln=1, fill=True)
                 
                 if not items_in_collo:
-                    pdf.cell(0, 7, "(Vuoto)", ln=1)
+                    pdf.set_font("Arial", "I", 9)
+                    pdf.cell(0, 7, "(Vuoto)", ln=1, align="C")
+                    pdf.ln(3)
                 else:
+                    pdf.set_font("Arial", "B", 9)
+                    pdf.cell(COL_W_QTY, 6, "Qta", border="B")
+                    pdf.cell(COL_W_CODE, 6, "Codice", border="B")
+                    pdf.cell(COL_W_DESC, 6, "Descrizione", border="B", ln=1)
+                    
+                    pdf.set_font("Arial", size=9)
                     for codice_art, qta in sorted(items_in_collo.items()):
                         desc = desc_map.get(codice_art, 'N/D')
-                        linea = f"{int(qta)} x [{codice_art}] {desc}"
-                        pdf.multi_cell(0, 7, linea) # multi_cell per testo a capo
+                        qta_str = str(int(qta))
+                        cod_str = f"[{codice_art}]"
+                        
+                        # --- INIZIO BLOCCO CORRETTO 1 ---
+                        
+                        # Calcola l'altezza della riga
+                        pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE) # Sposta per calcolo
+                        row_height = pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=0, dry_run=True, output="HEIGHT")
+                        row_height = max(5, row_height)
+                        
+                        # Resetta la X all'inizio
+                        pdf.set_x(pdf.l_margin) 
+                        
+                        # Stampa le celle
+                        pdf.set_font("Arial", "B", 9)
+                        pdf.cell(COL_W_QTY, row_height, qta_str, border=0, align="L")
+                        pdf.set_font("Arial", "", 9)
+                        pdf.cell(COL_W_CODE, row_height, cod_str, border=0)
+                        pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=1)
+                        
+                        # --- FINE BLOCCO CORRETTO 1 ---
                         riepilogo_totale_articoli[codice_art] += qta
-                pdf.ln(4)
+                pdf.ln(5)
 
             # 5. Scrivi riepilogo totale articoli
             pdf.ln(5)
             pdf.set_font("Arial", "B", 13)
-            pdf.cell(0, 10, "RIEPILOGO ARTICOLI TOTALI PRELEVATI", border="T", ln=1) # Bordo superiore
-            pdf.set_font("Arial", size=10)
+            pdf.set_fill_color(230, 230, 230)
+            pdf.cell(0, 10, "RIEPILOGO ARTICOLI TOTALI PRELEVATI", border=0, ln=1, fill=True)
+            
+            pdf.set_font("Arial", "B", 9)
+            pdf.cell(COL_W_QTY, 6, "Qta Tot.", border="B")
+            pdf.cell(COL_W_CODE, 6, "Codice", border="B")
+            pdf.cell(COL_W_DESC, 6, "Descrizione", border="B", ln=1)
+            pdf.set_font("Arial", size=9)
             
             if not riepilogo_totale_articoli:
                 pdf.cell(0, 7, "Nessun articolo prelevato.", ln=1)
             else:
                 for codice_art, qta_totale in sorted(riepilogo_totale_articoli.items()):
-                     desc = desc_map.get(codice_art, 'N/D')
-                     linea = f"{int(qta_totale)} x [{codice_art}] {desc}"
-                     pdf.multi_cell(0, 7, linea)
+                    desc = desc_map.get(codice_art, 'N/D')
+                    qta_str = str(int(qta_totale))
+                    cod_str = f"[{codice_art}]"
+
+                    # --- INIZIO BLOCCO CORRETTO 2 ---
+                    
+                    # Calcola l'altezza della riga
+                    pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE) # Sposta per calcolo
+                    row_height = pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=0, dry_run=True, output="HEIGHT")
+                    row_height = max(5, row_height)
+                    
+                    # Resetta la X all'inizio
+                    pdf.set_x(pdf.l_margin) 
+                    
+                    # Stampa le celle
+                    pdf.set_font("Arial", "B", 9)
+                    pdf.cell(COL_W_QTY, row_height, qta_str, border=0, align="L")
+                    pdf.set_font("Arial", "", 9)
+                    pdf.cell(COL_W_CODE, row_height, cod_str, border=0)
+                    pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=1)
+
+                    # --- FINE BLOCCO CORRETTO 2 ---
 
             # --- 6. Ottieni il PDF come bytes ---
-            # Nota: fpdf2 produce latin-1, che è ok per dbx.output(dest='S').encode('latin-1')
-            pdf_bytes = pdf.output(dest='S').encode('latin-1')
-            print(f"DEBUG [complete_picking]: PDF generato ({len(pdf_bytes)} bytes).")
+            pdf_bytes = pdf.output()
+            print(f"DEBUG [complete_picking]: PDF (estetico) generato ({len(pdf_bytes)} bytes).")
 
-            # --- 7. Tenta Upload su Dropbox (la tua funzione _upload_to_dropbox accetta già bytes) ---
+            # --- 7. Tenta Upload su Dropbox ---
             upload_success, upload_message = _upload_to_dropbox(pdf_bytes, filename)
             
             if upload_success:
                 flash(f"Packing list PDF salvata su Dropbox ({filename}). In attesa di controllo.", "success")
+                
+                # --- NUOVA AGGIUNTA: Salva il nome del file nello stato ---
+                try:
+                    with app_data_store_lock:
+                        state_to_update = app_data_store.get("statuses", {}).get(order_id)
+                        if state_to_update:
+                            state_to_update['pdf_filename'] = filename
+                            print(f"DEBUG [order_action]: Salvato filename '{filename}' per ordine {order_key}")
+                except Exception as e_save:
+                    print(f"ERRORE [order_action]: Fallito salvataggio filename PDF: {e_save}")
+                    flash("Errore nel salvare il riferimento al PDF.", "warning")
+                # --- FINE NUOVA AGGIUNTA ---
+
             else:
                 flash(f"ATTENZIONE: Fallito upload PDF su Dropbox ({upload_message}).", "danger")
 
@@ -1600,7 +1698,7 @@ def order_action(sigla, serie, numero):
             import traceback; traceback.print_exc()
             flash("Picking completato, MA fallito generazione/upload del PDF.", "danger")
 
-        # --- 8. Salva localmente (come bytes) ---
+        # --- 8. Salva localmente (come bytes) (invariato) ---
         if pdf_bytes and filename:
             try:
                 output_folder = os.path.join(app.root_path, 'picking_lists_locali')
@@ -2346,6 +2444,53 @@ def delete_todo(item_id):
         flash("Errore durante l'eliminazione.", "danger")
 
     return redirect(url_for('todo_list'))
+
+@app.route('/download-pdf/<path:filename>')
+@login_required
+def download_pdf(filename):
+    """
+    Gestisce il download di un PDF da Dropbox in modo sicuro.
+    L'utente deve essere loggato come admin.
+    """
+    if not current_user.has_role('admin'):
+        flash("Accesso non autorizzato.", "danger")
+        return redirect(url_for('dashboard'))
+
+    if not DROPBOX_TOKEN:
+        flash("Errore: Dropbox non configurato sul server.", "danger")
+        return redirect(url_for('amministrazione'))
+
+    # Il percorso su Dropbox inizia sempre con /
+    dropbox_path = f"/{filename}"
+    print(f"DEBUG [download_pdf]: Tentativo download '{dropbox_path}' da Dropbox...")
+
+    try:
+        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+        
+        # Scarica il file da Dropbox
+        # files_download restituisce i metadati e la risposta HTTP
+        metadata, res = dbx.files_download(path=dropbox_path)
+        
+        # Invia il file (res.content) al browser come allegato
+        return Response(
+            res.content,
+            mimetype='application/pdf',
+            headers={
+                # Questo forza il browser a scaricarlo col nome corretto
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(metadata.size)
+            }
+        )
+    except dropbox.exceptions.ApiError as e:
+        # Errore comune: il file non c'è
+        print(f"ERRORE [download_pdf]: File non trovato su Dropbox '{dropbox_path}': {e}")
+        flash(f"Errore: File {filename} non trovato su Dropbox.", "danger")
+        return redirect(url_for('amministrazione'))
+    except Exception as e:
+        # Altro errore
+        print(f"ERRORE [download_pdf]: Errore generico: {e}")
+        flash("Errore sconosciuto durante il download del file.", "danger")
+        return redirect(url_for('amministrazione'))
 
 
 # --- NUOVA POSIZIONE: Creazione DB all'avvio, prima di app.run ---
