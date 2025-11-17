@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 import time
 from datetime import datetime
 import json # Importa json per logging errori
+import urllib3
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Carica le variabili dal file .env
 load_dotenv()
 
