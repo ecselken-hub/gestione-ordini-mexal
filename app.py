@@ -87,6 +87,15 @@ users_db = {
     "antonio": {"password_hash": "pbkdf2:sha256:1000000$cnsUw4MBXg3htnhw$66d5ea591c79f0985ddc17c62bbb4b27ecd1a63a72ab5ed4f9b6d996bf46be3a", "roles": ["admin"]} # Esempio hash per 'antoniopass'
 }
 
+GRUPPI_PESCE = ['01-PESCE', '01-CEFALOPODI', '01-CROSTACEI']
+GRUPPI_FRUTTI = ['01-FRUTTI MARE', '01-OSTRICHE']
+GRUPPI_GELO = ['03-MAT-PRIM-GELO,', '03-PIATTI-PRONTI', '04-SURIMI-GRANCH', '05-DESSERT-GELO',
+               '06-FETT-SLI-TART', '01-EDMAME-WAKAME', '02-GAM-NOB-EBI', '04-PANE-PASTA',
+               '07-UOVA-MAS-TOBK']
+GRUPPI_SECCO = ['01-ACET-MIR-SAKE', '02-RISO', '03-ALGHE', '04-SALSA-SOIA', '05-PASTA-CEREALI',
+                '06-CONDIMENTI', '07-FRUTT-FRUTSEC', '08-SALS-DRES-TOP', '09-BIRRA', '10-SAKE',
+                '11-DESSERT-SECCO', '01-ALTRO-MATER']
+
 class User(UserMixin):
     """Classe utente per Flask-Login."""
     def __init__(self, id, roles, nome_autista=None):
@@ -163,6 +172,39 @@ class PushSubscription(db.Model):
     subscription_json = db.Column(db.Text, nullable=False)
     # Potresti aggiungere un timestamp di creazione/aggiornamento
     # created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class PickingState(db.Model):
+    """ Salva lo stato di picking per un singolo ordine. """
+    # Usiamo 'order_key' (es. "OC:1:4197") come chiave primaria
+    order_key = db.Column(db.String(50), primary_key=True) 
+    order_id = db.Column(db.String(20), index=True) # Il 'numero' ordine
+    status = db.Column(db.String(50), default='Da Lavorare', index=True)
+    # Salva l'intera packing list come stringa JSON
+    packing_list_json = db.Column(db.Text, default='[]') 
+    # Salva i picked_items (riepilogo) come stringa JSON
+    picked_items_json = db.Column(db.Text, default='{}') 
+    colli_totali_operatore = db.Column(db.Integer, default=0)
+    pdf_filename = db.Column(db.String(255), nullable=True)
+
+class LogisticsAssignment(db.Model):
+    """ Salva l'assegnazione autista e le note per un ordine. """
+    order_key = db.Column(db.String(50), primary_key=True)
+    autista_codice = db.Column(db.String(50), nullable=True)
+    autista_nome = db.Column(db.String(100), nullable=True, index=True)
+    nota_autista = db.Column(db.Text, nullable=True)
+
+class DeliveryEvent(db.Model):
+    """ Salva gli orari di inizio e fine consegna. """
+    order_key = db.Column(db.String(50), primary_key=True)
+    start_time_str = db.Column(db.String(10), nullable=True)
+    end_time_str = db.Column(db.String(10), nullable=True)
+
+class CalculatedRoute(db.Model):
+    """ Salva il giro calcolato per un autista. """
+    autista_nome = db.Column(db.String(100), primary_key=True)
+    # Salva l'intero oggetto 'giro' (summary + tappe) come JSON
+    route_data_json = db.Column(db.Text, nullable=False)
+    last_calculated = db.Column(db.DateTime, default=datetime.utcnow)
 
 # --- Rotte Service Worker & VAPID Key (OK) ---
 @app.route('/sw.js')
@@ -276,66 +318,39 @@ def send_push_notification(user_id, title, body):
 
     print(f"Invio notifiche completato per {user_id}: {success_count} successi, {failure_count} fallimenti.")
 
-# --- CORREZIONE 1: Stato Globale Protetto da Lock ---
-# NOTA: Questa è una soluzione TEMPORANEA e non ideale per produzione.
-# Un database per 'statuses', 'logistics', 'delivery_events', 'calculated_routes', 'driver_notes'
-# sarebbe più robusto e scalabile.
-app_data_store_lock = threading.Lock()
-app_data_store = {
-    "orders": {}, # Cache degli ordini da API
-    "statuses": {}, # Stato locale (Da Lavorare, In Picking, etc.) - Chiave: numero ordine (str)
-    "logistics": {}, # Assegnazione vettore - Chiave: order_key (str), Valore: dict {codice, nome}
-    "delivery_events": {}, # Orari start/end consegna - Chiave: order_key (str)
-    "calculated_routes": {}, # Percorsi calcolati - Chiave: nome_autista (str)
-    "driver_notes": {}, # Note per autista - Chiave: order_key (str)
-    "last_load_time": None # Timestamp ultimo caricamento da API
-}
-def get_initial_status():
-    """Restituisce lo stato iniziale per un nuovo ordine, inclusa la packing list."""
-    return {
-        'status': 'Da Lavorare',
-        'picked_items': {}, # Manteniamo per retrocompatibilità/riepilogo veloce
-        'colli_totali_operatore': 0,
-        'packing_list': [] # NUOVA STRUTTURA: Es. [{'collo_id': 1, 'items': {'ART001': 2, 'ART002': 1}}]
-    }
 
-# --- Funzione Caricamento Dati (con Lock e Error Handling) ---
-# --- CORREZIONE 4: Aggiunto commento su scalabilità ---
 def load_all_data():
     """
     Carica (o ricarica) dati da API Mexal, dando priorità
-    all'indirizzo di spedizione specifico dell'ordine. CORRETTO
+    all'indirizzo di spedizione e POPOLA IL DB con gli stati.
     """
-    # Rimuoviamo l'invalidazione forzata della cache
-    # with app_data_store_lock:
-    #    if "orders" in app_data_store:
-    #        print("DEBUG: Invalidazione forzata cache ordini...")
-    #        app_data_store["orders"] = {}
-
-    with app_data_store_lock:
-        if app_data_store.get("orders"):
-            print("Dati già presenti in cache.")
-            return list(app_data_store["orders"].values())
-        else:
-            print("Cache ordini vuota, procedo al caricamento dall'API...")
-
     print("--- Inizio caricamento di massa dei dati dall'API (con priorità indirizzi spedizione) ---")
 
-    # ... (Caricamento clienti, pagamenti, ordini, righe - INVARIATO) ...
     # 1. Carica Clienti
     clients_response = mx_call_api('risorse/clienti/ricerca', method='POST', data={'filtri': []})
-    if not clients_response or not isinstance(clients_response.get('dati'), list): print("Errore CRITICO: Impossibile caricare i dati clienti."); flash("Errore nel recupero dei dati clienti.", "danger"); return None
+    if not clients_response or not isinstance(clients_response.get('dati'), list): 
+        print("Errore CRITICO: Impossibile caricare i dati clienti.")
+        flash("Errore nel recupero dei dati clienti.", "danger")
+        return None, None # Restituisce None per ordini e mappa
     client_map = {client['codice']: client for client in clients_response['dati'] if 'codice' in client}
     print(f"Caricati {len(client_map)} clienti.")
+    
     # 2. Carica Metodi Pagamento
     payment_map = get_payment_methods()
-    if not payment_map: flash("Attenzione: Non è stato possibile caricare i metodi di pagamento.", "warning"); payment_map = {}
+    if not payment_map: 
+        flash("Attenzione: Non è stato possibile caricare i metodi di pagamento.", "warning")
+        payment_map = {}
     print(f"Caricati {len(payment_map)} metodi di pagamento.")
+    
     # 3. Carica Testate Ordini
     orders_response = mx_call_api('risorse/documenti/ordini-clienti/ricerca', method='POST', data={'filtri': []})
-    if not orders_response or not isinstance(orders_response.get('dati'), list): print("Errore CRITICO: Impossibile caricare gli ordini."); flash("Errore nel recupero degli ordini.", "danger"); return None
+    if not orders_response or not isinstance(orders_response.get('dati'), list): 
+        print("Errore CRITICO: Impossibile caricare gli ordini.")
+        flash("Errore nel recupero degli ordini.", "danger")
+        return None, None
     orders = orders_response['dati']
     print(f"Caricate {len(orders)} testate ordini.")
+    
     # 4. Carica Righe Ordini
     rows_response = mx_call_api('risorse/documenti/ordini-clienti/righe/ricerca', method='POST', data={'filtri': []})
     rows_map = defaultdict(list)
@@ -343,24 +358,40 @@ def load_all_data():
         row_count = 0
         for row in rows_response['dati']:
             sigla = row.get('sigla', '?'); serie = row.get('serie', '?'); numero = row.get('numero', '?')
-            if sigla != '?' and serie != '?' and numero != '?': rows_map[f"{sigla}:{serie}:{numero}"].append(row); row_count += 1
+            if sigla != '?' and serie != '?' and numero != '?': 
+                rows_map[f"{sigla}:{serie}:{numero}"].append(row)
+                row_count += 1
         print(f"Caricate {row_count} righe ordini.")
-    else: print("Attenzione: Non è stato possibile caricare le righe degli ordini."); flash("Attenzione: Errore caricamento righe.", "warning")
+    else: 
+        print("Attenzione: Non è stato possibile caricare le righe degli ordini.")
+        flash("Attenzione: Errore caricamento righe.", "warning")
 
-
-    # 5. Assembla i dati
-    new_orders_data = {}
-    new_statuses_data = {} # Mantiene stati esistenti se l'ordine c'era già
-    print("Inizio assemblaggio dati ordini con priorità indirizzi spedizione...")
+    # 5. Assembla i dati e Sincronizza il DB
+    # Manteniamo una mappa degli ordini in memoria per questa richiesta (ma non nello store globale)
+    orders_data_map = {} 
+    print("Inizio assemblaggio dati ordini e sincronizzazione stati DB...")
     processed_count = 0
     address_fetch_errors = 0
     specific_address_used_count = 0
+    new_states_created = 0
 
+    # Recupera tutti gli stati esistenti in una sola query
+    existing_states = {state.order_key: state for state in PickingState.query.all()}
+    
     for order in orders:
         sigla = order.get('sigla', '?'); serie = order.get('serie', '?'); numero = order.get('numero', '?')
         order_key = f"{sigla}:{serie}:{numero}"
         order_id_str = str(numero) if numero != '?' else None
-        if not order_id_str: continue
+        if not order_id_str: 
+            continue
+
+        # --- Sincronizza Stato Picking con DB ---
+        if order_key not in existing_states:
+            new_state = PickingState(order_key=order_key, order_id=order_id_str)
+            db.session.add(new_state)
+            existing_states[order_key] = new_state # Aggiungi al set per questa sessione
+            new_states_created += 1
+        # --- Fine Sincronizzazione ---
 
         client_code = order.get('cod_conto')
         client_data = client_map.get(client_code, {})
@@ -368,9 +399,8 @@ def load_all_data():
         order['ragione_sociale'] = client_data.get('ragione_sociale', 'N/D')
         order['telefono'] = client_data.get('telefono', 'N/D')
 
-        # --- LOGICA INDIRIZZO CON DEBUG AGGIUNTIVO ---
+        # --- LOGICA INDIRIZZO (Invariata) ---
         shipping_address_id = order.get('cod_anag_sped')
-        # Inizializza con valori anagrafica
         effective_address = client_data.get('indirizzo', 'N/D')
         effective_locality = client_data.get('localita', 'N/D')
         effective_cap = client_data.get('cap', '')
@@ -378,28 +408,12 @@ def load_all_data():
         effective_telefono = order['telefono']
         shipping_details_source = "Anagrafica Cliente"
 
-        # Stampa valori iniziali PRIMA del check indirizzo specifico
-        print(f"--- Processing Ordine {order_key} (Cliente: {client_code}) ---")
-        print(f"  Anagrafica Cliente -> Indirizzo: '{effective_address}', Località: '{effective_locality}'")
-        print(f"  Ordine -> cod_anag_sped: {shipping_address_id}")
-
         if shipping_address_id:
-            print(f"  Tentativo recupero indirizzo spedizione ID: {shipping_address_id}...")
-            shipping_address_data = get_shipping_address(shipping_address_id) # Chiama API
-
-            # Logga ESATTAMENTE cosa restituisce get_shipping_address
-            print(f"  Risultato get_shipping_address({shipping_address_id}): {shipping_address_data}")
-
+            shipping_address_data = get_shipping_address(shipping_address_id)
             if shipping_address_data and isinstance(shipping_address_data, dict):
-                addr_sped = shipping_address_data.get('indirizzo') # Può essere None o ''
-                loc_sped = shipping_address_data.get('localita') # Può essere None o ''
-
-                # Logga i valori estratti dall'indirizzo specifico
-                print(f"  Indirizzo Sped. Estratto -> Indirizzo: '{addr_sped}', Località: '{loc_sped}'")
-
-                # CONTROLLO: Usa indirizzo specifico SE ENTRAMBI sono presenti e non vuoti
-                if addr_sped and loc_sped: # Check if both are truthy (not None, not empty string)
-                    print(f"  CONDIZIONE SODDISFATTA: Uso indirizzo specifico.")
+                addr_sped = shipping_address_data.get('indirizzo')
+                loc_sped = shipping_address_data.get('localita')
+                if addr_sped and loc_sped:
                     effective_address = addr_sped
                     effective_locality = loc_sped
                     effective_cap = shipping_address_data.get('cap', effective_cap)
@@ -408,82 +422,145 @@ def load_all_data():
                     shipping_details_source = f"Indirizzo Sped. ID: {shipping_address_id}"
                     specific_address_used_count += 1
                 else:
-                    print(f"  CONDIZIONE NON SODDISFATTA: Indirizzo specifico incompleto. Mantengo anagrafica.")
-                    address_fetch_errors += 1 # Conta come errore se l'ID c'era ma i dati erano incompleti
+                    address_fetch_errors += 1
             else:
-                print(f"  Fallito recupero o formato non valido per indirizzo spedizione {shipping_address_id}. Mantengo anagrafica.")
                 address_fetch_errors += 1
-        else:
-            print("  Nessun cod_anag_sped specificato. Uso anagrafica.")
-
-        # Salva i valori EFFETTIVI finali
+        
         order['indirizzo_effettivo'] = effective_address
         order['localita_effettiva'] = effective_locality
         order['cap_effettivo'] = effective_cap
         order['provincia_effettiva'] = effective_provincia
         order['telefono_effettivo'] = effective_telefono
         order['fonte_indirizzo'] = shipping_details_source
-
-        # Logga i valori finali assegnati all'ordine
-        print(f"  Valori FINALI assegnati all'ordine {order_key}:")
-        print(f"    indirizzo_effettivo: '{order['indirizzo_effettivo']}'")
-        print(f"    localita_effettiva: '{order['localita_effettiva']}'")
-        print(f"    fonte_indirizzo: '{order['fonte_indirizzo']}'")
-        print(f"--- Fine Processing Ordine {order_key} ---")
         # --- FINE LOGICA INDIRIZZO ---
 
-        # ... (assemblaggio resto dati ordine: dati aggiuntivi, note, righe - INVARIATO) ...
-        dati_aggiuntivi = get_dati_aggiuntivi(client_code); order['orario1_start'] = dati_aggiuntivi.get('orario1start'); order['orario1_end'] = dati_aggiuntivi.get('orario1end')
-        order['nota'] = order.get('nota', ''); order['pagamento_desc'] = payment_map.get(order.get('id_pagamento'), 'N/D')
+        dati_aggiuntivi = get_dati_aggiuntivi(client_code)
+        order['orario1_start'] = dati_aggiuntivi.get('orario1start')
+        order['orario1_end'] = dati_aggiuntivi.get('orario1end')
+        order['nota'] = order.get('nota', '')
+        order['pagamento_desc'] = payment_map.get(order.get('id_pagamento'), 'N/D')
         order['righe'] = rows_map.get(order_key, [])
 
-        new_orders_data[order_key] = order
-
-        # Gestione stato (INVARIATO)
-        with app_data_store_lock:
-            if order_id_str not in app_data_store.get("statuses", {}): app_data_store.setdefault("statuses", {})[order_id_str] = get_initial_status()
-            if order_id_str not in new_statuses_data: new_statuses_data[order_id_str] = app_data_store.get("statuses", {}).get(order_id_str, get_initial_status())
+        orders_data_map[order_key] = order # Costruisci la mappa
         processed_count += 1
 
+    # Commit di tutti i nuovi stati creati in una sola transazione
+    try:
+        db.session.commit()
+        print(f"Sincronizzazione DB completata. Creati {new_states_created} nuovi stati ordine.")
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE CRITICO durante il commit dei nuovi stati: {e}")
+        flash("Errore nel salvataggio dei nuovi stati ordine. Riprovare.", "danger")
+        return None, None
 
-    # Aggiorna store globale (INVARIATO)
-    with app_data_store_lock:
-        app_data_store["orders"] = new_orders_data
-        # Assicurati stato per ogni ordine caricato
-        for order_obj in new_orders_data.values():
-            id_str = str(order_obj.get('numero'))
-            if id_str and id_str not in app_data_store.get("statuses", {}):
-                 app_data_store.setdefault("statuses", {})[id_str] = get_initial_status()
-
-        app_data_store["last_load_time"] = datetime.now()
-        print(f"--- Caricamento completato. {processed_count} ordini in cache. Usati {specific_address_used_count} indirizzi sped. specifici ({address_fetch_errors} errori). ---")
-        if address_fetch_errors > 0:
-             flash(f"Attenzione: Impossibile recuperare o validare {address_fetch_errors} indirizzi di spedizione. Usato indirizzo cliente.", "warning")
-        return list(app_data_store["orders"].values())
+    print(f"--- Caricamento completato. {processed_count} ordini in cache. Usati {specific_address_used_count} indirizzi sped. specifici ({address_fetch_errors} errori). ---")
+    if address_fetch_errors > 0:
+         flash(f"Attenzione: Impossibile recuperare o validare {address_fetch_errors} indirizzi di spedizione. Usato indirizzo cliente.", "warning")
+    
+    # Restituisce la mappa degli ordini e la mappa dei clienti
+    return orders_data_map, client_map
 
 
-# --- Rotte Principali (con Lock e Error Handling) ---
+# --- Cache Semplice per i dati (sostituisce app_data_store["orders"]) ---
+# Mantiene i dati in memoria per 10 minuti per ridurre le chiamate API
+_cache = {
+    "orders_map": None,
+    "client_map": None,
+    "last_load_time": None
+}
+_article_details_cache = {}
+CACHE_DURATION = timedelta(minutes=10) # Cache valida per 10 minuti
+
+def get_cached_order_data():
+    """
+    Funzione helper che gestisce il caricamento e il caching dei dati
+    degli ordini e dei clienti. Sostituisce la lettura da app_data_store.
+    """
+    now = datetime.now()
+    if _cache["orders_map"] and _cache["last_load_time"] and (now - _cache["last_load_time"] < CACHE_DURATION):
+        print("Dati ordini letti dalla cache (valida).")
+        return _cache["orders_map"], _cache["client_map"]
+    
+    print("Cache scaduta o vuota. Ricarico i dati da Mexal...")
+    orders_map, client_map = load_all_data() # Questa funzione ora popola il DB
+    
+    if orders_map is not None:
+        _cache["orders_map"] = orders_map
+        _cache["client_map"] = client_map
+        _cache["last_load_time"] = now
+        print("Cache ordini aggiornata.")
+    else:
+        print("Caricamento dati fallito. La cache non è stata aggiornata.")
+        # Restituisce la cache vecchia se disponibile, altrimenti None
+        return _cache["orders_map"], _cache["client_map"] 
+        
+    return orders_map, client_map
+
+# --- Polling Route (Modificato per invalidare la cache) ---
+@app.route('/check-updates')
+@login_required
+def check_updates():
+    """
+    Controlla se ci sono state modifiche su Mexal.
+    Se rileva modifiche, invalida la cache in memoria.
+    """
+    last_load = _cache.get("last_load_time")
+
+    if not last_load or not isinstance(last_load, datetime):
+        print("Polling: Dati mai caricati, forzo aggiornamento.")
+        return jsonify({'new_data': True})
+
+    try:
+        last_load_str = last_load.strftime('%Y%m%d %H%M%S')
+    except Exception as e:
+        print(f"Polling: Errore formattazione last_load_time ({last_load}): {e}. Forzo aggiornamento.")
+        _cache["orders_map"] = None
+        _cache["last_load_time"] = None
+        return jsonify({'new_data': True})
+
+    search_data = { 'filtri': [{'campo': 'data_ult_mod', 'condizione': '>', 'valore': last_load_str}] }
+
+    print(f"Polling: Verifico aggiornamenti da {last_load_str}...")
+    updates_testate = mx_call_api('risorse/documenti/ordini-clienti/ricerca', method='POST', data=search_data)
+    updates_righe = mx_call_api('risorse/documenti/ordini-clienti/righe/ricerca', method='POST', data=search_data)
+
+    if updates_testate is None or updates_righe is None:
+         print("Polling: Errore durante la chiamata API.")
+         return jsonify({'new_data': False, 'error': 'API check failed'})
+
+    if (isinstance(updates_testate.get('dati'), list) and updates_testate['dati']) or \
+       (isinstance(updates_righe.get('dati'), list) and updates_righe['dati']):
+        print("Polling: Rilevati aggiornamenti. Invalido cache ordini e articoli.")
+        _cache["orders_map"] = None # Invalida cache ordini
+        _cache["last_load_time"] = None
+        _article_details_cache.clear() # <-- SVUOTA CACHE ARTICOLI
+        return jsonify({'new_data': True})
+    else:
+        print(f"Polling: Nessun aggiornamento rilevato.")
+        return jsonify({'new_data': False})
+
+
+# --- Rotte Principali (Rifattorizzate per DB) ---
 
 @app.route('/')
 @login_required
 def dashboard():
     """Reindirizza l'utente alla pagina appropriata in base al ruolo."""
+    # ... (Codice invariato) ...
     if current_user.has_role('admin'):
         return redirect(url_for('ordini_list'))
     elif current_user.has_role('preparatore'):
         return redirect(url_for('ordini_list'))
     elif current_user.has_role('autista'):
-        # Se l'autista ha un nome specifico associato, va alla sua pagina consegne
         if current_user.nome_autista:
             return redirect(url_for('consegne_autista', autista_nome=current_user.nome_autista))
         else:
-            # Altrimenti potrebbe andare a una pagina generica per autisti o dashboard
             flash("Profilo autista non completamente configurato (nome mancante).", "warning")
-            return redirect(url_for('autisti')) # Pagina elenco autisti/giri
+            return redirect(url_for('autisti'))
     else:
-        # Ruolo non gestito o mancante
         flash("Ruolo utente non definito o non autorizzato.", "danger")
-        logout_user() # Effettua il logout per sicurezza
+        logout_user()
         return redirect(url_for('login'))
     
 @app.route('/ordini')
@@ -494,57 +571,62 @@ def ordini_list():
         flash("Accesso non autorizzato alla lista ordini.", "danger")
         return redirect(url_for('dashboard'))
 
-    orders_list_copy = load_all_data() # Ottiene una copia dei dati correnti (o None)
-
-    if orders_list_copy is None:
-        # Errore API critico, messaggio già mostrato da load_all_data
+    orders_map, _ = get_cached_order_data() # Ottiene la mappa degli ordini
+    if orders_map is None:
         return render_template('orders.html', ordini_per_data=OrderedDict(), giorno_selezionato=None, active_page='ordini', enable_polling=False)
 
     giorno_filtro = request.args.get('giorno_filtro')
-    filtered_orders = []
+    filtered_orders_keys = []
 
+    # Filtra le CHIAVI degli ordini
     if giorno_filtro:
         try:
-            # Formato atteso: YYYYMMDD, filtra per giorno finale
             giorno_da_cercare = giorno_filtro.strip().zfill(2)
             if not giorno_da_cercare.isdigit() or len(giorno_da_cercare) != 2:
                 raise ValueError("Formato giorno non valido.")
-
-            filtered_orders = [
-                order for order in orders_list_copy
-                if isinstance(order.get('data_documento'), str) and len(order['data_documento']) == 8 and order['data_documento'].endswith(giorno_da_cercare)
-            ]
-            if not filtered_orders:
+            
+            for key, order in orders_map.items():
+                if isinstance(order.get('data_documento'), str) and len(order['data_documento']) == 8 and order['data_documento'].endswith(giorno_da_cercare):
+                    filtered_orders_keys.append(key)
+            
+            if not filtered_orders_keys:
                  flash(f"Nessun ordine trovato per il giorno '{giorno_filtro}'.", "info")
 
         except ValueError as e:
             flash(f"Filtro giorno non valido: {e}. Mostro tutti gli ordini.", "warning")
-            filtered_orders = orders_list_copy
+            filtered_orders_keys = list(orders_map.keys())
     else:
-        filtered_orders = orders_list_copy
+        filtered_orders_keys = list(orders_map.keys())
 
-    # Ordina per data documento (stringa YYYYMMDD), decrescente
-    filtered_orders.sort(key=lambda order: order.get('data_documento', '0'), reverse=True)
+    # Ordina le CHIAVI per data documento
+    filtered_orders_keys.sort(
+        key=lambda key: orders_map.get(key, {}).get('data_documento', '0'), 
+        reverse=True
+    )
 
+    # Recupera gli stati solo per gli ordini filtrati
     ordini_per_data = OrderedDict()
-    # Usa il lock SOLO per leggere lo stato corrente di ogni ordine
-    with app_data_store_lock:
-        statuses_copy = dict(app_data_store["statuses"]) # Copia stati sotto lock
+    if filtered_orders_keys:
+        # Fai una singola query per tutti gli stati necessari
+        states_db = db.session.query(PickingState).filter(
+            PickingState.order_key.in_(filtered_orders_keys)
+        ).all()
+        states_map = {state.order_key: state for state in states_db}
+    else:
+        states_map = {}
+        
+    for key in filtered_orders_keys:
+        order = orders_map[key]
+        state = states_map.get(key)
 
-    for order in filtered_orders:
-        order_id = str(order.get('numero'))
-        if not order_id: continue # Salta ordini senza numero
-
-        # Leggi stato dalla copia
-        order['local_status'] = statuses_copy.get(order_id, {}).get('status', 'Da Lavorare')
-
-        # Formattazione data (YYYYMMDD -> DD/MM/YYYY)
+        order['local_status'] = state.status if state else 'Da Lavorare'
+        
         date_str = order.get('data_documento')
         data_formattata = "Data Sconosciuta"
         if isinstance(date_str, str) and len(date_str) == 8:
              try:
                 data_formattata = f"{date_str[6:8]}/{date_str[4:6]}/{date_str[0:4]}"
-             except IndexError: pass # Lascia "Data Sconosciuta"
+             except IndexError: pass
         order['data_formattata'] = data_formattata
 
         ordini_per_data.setdefault(data_formattata, []).append(order)
@@ -556,43 +638,45 @@ def ordini_list():
 @login_required
 def trasporto():
     """Pagina per l'assegnazione dei vettori agli ordini."""
-    # ... (controllo permessi iniziale invariato) ...
     if not current_user.has_role('admin'):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
-    orders_list_copy = load_all_data() # Ora contiene indirizzo_effettivo, localita_effettiva
-    if orders_list_copy is None:
+    orders_map, _ = get_cached_order_data()
+    if orders_map is None:
         return render_template('trasporto.html', ordini_per_data=OrderedDict(), vettori=[], active_page='trasporto', enable_polling=False)
 
     vettori = get_vettori()
     if not vettori:
         flash("Attenzione: Errore nel caricamento dei vettori.", "warning")
         vettori = []
-    vettori_map = {v['codice']: v.get('ragione_sociale') or v.get('descrizione', 'N/D') for v in vettori if 'codice' in v}
 
     ordini_per_data = OrderedDict()
-    orders_list_copy.sort(key=lambda order: order.get('data_documento', '0'), reverse=True)
+    # Ordina le CHIAVI
+    sorted_keys = sorted(
+        orders_map.keys(), 
+        key=lambda key: orders_map.get(key, {}).get('data_documento', '0'), 
+        reverse=True
+    )
 
-    with app_data_store_lock:
-        logistics_copy = dict(app_data_store.get("logistics", {}))
-        driver_notes_copy = dict(app_data_store.get("driver_notes", {}))
-        # Assicura formato {codice, nome} in logistics (AGGIORNA SULLO STORE REALE)
-        for key, value in logistics_copy.items():
-            if isinstance(value, str):
-                app_data_store["logistics"][key] = {'codice': value, 'nome': vettori_map.get(value, 'Sconosciuto')}
-            elif not isinstance(value, dict) or 'codice' not in value or 'nome' not in value:
-                 if key in app_data_store["logistics"]: del app_data_store["logistics"][key]
-        logistics_copy = dict(app_data_store["logistics"]) # Rileggi aggiornato
+    # Recupera tutte le assegnazioni in una sola query
+    assignments_db = LogisticsAssignment.query.all()
+    assignments_map = {a.order_key: a for a in assignments_db}
 
+    for key in sorted_keys:
+        order = orders_map[key]
+        assignment = assignments_map.get(key)
+        
+        if assignment:
+            order['vettore_assegnato_info'] = {
+                'codice': assignment.autista_codice,
+                'nome': assignment.autista_nome
+            }
+            order['nota_autista'] = assignment.nota_autista or ''
+        else:
+            order['vettore_assegnato_info'] = None
+            order['nota_autista'] = ''
 
-    for order in orders_list_copy: # order ora ha indirizzo_effettivo
-        order_key = f"{order.get('sigla','?')}:{order.get('serie','?')}:{order.get('numero','?')}"
-        logistic_info = logistics_copy.get(order_key)
-        order['vettore_assegnato_info'] = logistic_info
-        order['nota_autista'] = driver_notes_copy.get(order_key, '')
-
-        # Formattazione data (invariata)
         date_str = order.get('data_documento')
         data_formattata = "Data Sconosciuta"
         if isinstance(date_str, str) and len(date_str) == 8:
@@ -601,225 +685,180 @@ def trasporto():
         order['data_formattata'] = data_formattata
 
         ordini_per_data.setdefault(data_formattata, []).append(order)
-        # NOTA: Assicurati che il template 'trasporto.html' mostri
-        #       order.indirizzo_effettivo e order.localita_effettiva
 
     return render_template('trasporto.html', ordini_per_data=ordini_per_data, vettori=vettori, active_page='trasporto', enable_polling=True)
 
 
-# --- Polling Route (con Lock e Error Handling) ---
-# --- CORREZIONE 6: Aggiunto commento su polling ---
-@app.route('/check-updates')
-@login_required
-def check_updates():
-    """
-    Controlla se ci sono state modifiche su Mexal dall'ultimo caricamento.
-    Se rileva modifiche, invalida la cache locale forzando un ricaricamento.
-
-    NOTA: Questo approccio invalida TUTTA la cache. Un'ottimizzazione
-    sarebbe recuperare solo i dati modificati e aggiornare la cache
-    in modo granulare (se l'API lo supporta).
-    """
-    with app_data_store_lock: # Leggi last_load_time in modo sicuro
-        last_load = app_data_store.get("last_load_time")
-
-    if not last_load or not isinstance(last_load, datetime):
-        print("Polling: Dati mai caricati o timestamp non valido, forzo aggiornamento.")
-        # Non serve invalidare, load_all_data lo farà
-        return jsonify({'new_data': True})
-
-    try:
-        last_load_str = last_load.strftime('%Y%m%d %H%M%S')
-    except Exception as e:
-        print(f"Polling: Errore formattazione last_load_time ({last_load}): {e}. Forzo aggiornamento.")
-        with app_data_store_lock: # Invalida cache in caso di errore timestamp
-            app_data_store["orders"] = {}
-            app_data_store["last_load_time"] = None
-        return jsonify({'new_data': True})
-
-    # Filtri API per data ultima modifica (usa 'filtri' minuscolo)
-    search_data = {
-        'filtri': [
-            # NOTA: Assicurati che 'data_ult_mod' sia il campo corretto
-            # e che l'operatore '>' funzioni come atteso nell'API Mexal.
-            {'campo': 'data_ult_mod', 'condizione': '>', 'valore': last_load_str}
-        ]
-    }
-
-    print(f"Polling: Verifico aggiornamenti da {last_load_str}...")
-    updates_testate = mx_call_api('risorse/documenti/ordini-clienti/ricerca', method='POST', data=search_data)
-    updates_righe = mx_call_api('risorse/documenti/ordini-clienti/righe/ricerca', method='POST', data=search_data)
-
-    # Controlla se le chiamate API sono fallite
-    if updates_testate is None or updates_righe is None:
-         print("Polling: Errore durante la chiamata API per verifica aggiornamenti.")
-         # Non invalidare la cache per errori API temporanei
-         return jsonify({'new_data': False, 'error': 'API check failed'})
-
-    # Controlla se ci sono dati ('dati' è una lista)
-    if (isinstance(updates_testate.get('dati'), list) and updates_testate['dati']) or \
-       (isinstance(updates_righe.get('dati'), list) and updates_righe['dati']):
-        print("Polling: Rilevati aggiornamenti da Mexal. Invalido la cache locale.")
-        with app_data_store_lock: # Invalida cache sotto lock
-            app_data_store["orders"] = {}
-            app_data_store["last_load_time"] = None
-        return jsonify({'new_data': True})
-    else:
-        print(f"Polling: Nessun aggiornamento rilevato da Mexal dopo {last_load_str}.")
-        return jsonify({'new_data': False})
-
-# --- Salvataggio Assegnazioni (con Lock) ---
+# --- Salvataggio Assegnazioni (Rifattorizzato per DB) ---
 @app.route('/assign_all_vettori', methods=['POST'])
 @login_required
 def assign_all_vettori():
-    """Salva le assegnazioni vettore e le note autista dal form /trasporto."""
+    """Salva le assegnazioni vettore e le note autista sul DB."""
     if not current_user.has_role('admin'):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
-    vettori = get_vettori() # Ricarica vettori per mappare codice a nome aggiornato
-    if vettori is None: # Errore API vettori
+    vettori = get_vettori()
+    if vettori is None:
         flash("Errore nel recupero dei vettori, impossibile salvare le assegnazioni.", "danger")
         return redirect(url_for('trasporto'))
     vettori_map = {v['codice']: v.get('ragione_sociale') or v.get('descrizione', 'Sconosciuto') for v in vettori if 'codice' in v}
 
     updated_logistics = 0
     updated_notes = 0
-    # Modifica lo store sotto lock
-    with app_data_store_lock:
-        # Crea copie per confronto e pulizia
-        current_logistics = dict(app_data_store.get("logistics", {}))
-        current_notes = dict(app_data_store.get("driver_notes", {}))
-        processed_orders = set() # Tiene traccia degli ordini nel form
+    
+    # Raccogli tutti i dati dal form
+    form_data = request.form
+    order_keys_in_form = set()
+    vettore_data = {}
+    nota_data = {}
 
-        for key, value in request.form.items():
-            if key.startswith('vettore_'):
-                order_key = key.replace('vettore_', '')
-                processed_orders.add(order_key)
-                vettore_codice = value.strip()
-                new_logistic_info = None
-                if vettore_codice:
-                    new_logistic_info = {
-                        'codice': vettore_codice,
-                        'nome': vettori_map.get(vettore_codice, 'Sconosciuto')
-                    }
+    for key, value in form_data.items():
+        if key.startswith('vettore_'):
+            order_key = key.replace('vettore_', '')
+            order_keys_in_form.add(order_key)
+            vettore_data[order_key] = value.strip()
+        elif key.startswith('nota_autista_'):
+            order_key = key.replace('nota_autista_', '')
+            order_keys_in_form.add(order_key)
+            nota_data[order_key] = value.strip()
 
-                # Aggiorna solo se cambiato o se prima non c'era
-                if current_logistics.get(order_key) != new_logistic_info:
-                    if new_logistic_info:
-                        app_data_store["logistics"][order_key] = new_logistic_info
+    if not order_keys_in_form:
+        flash("Nessun dato ricevuto dal form.", "warning")
+        return redirect(url_for('trasporto'))
+
+    # Recupera tutti gli assignment esistenti per gli ordini nel form
+    existing_assignments = LogisticsAssignment.query.filter(
+        LogisticsAssignment.order_key.in_(order_keys_in_form)
+    ).all()
+    assignments_map = {a.order_key: a for a in existing_assignments}
+
+    try:
+        for order_key in order_keys_in_form:
+            assignment = assignments_map.get(order_key)
+            
+            vettore_codice = vettore_data.get(order_key)
+            nota = nota_data.get(order_key, '') # Nota autista
+            
+            vettore_nome = vettori_map.get(vettore_codice) if vettore_codice else None
+            
+            if not vettore_codice and not nota:
+                # Se entrambi sono vuoti, cancella l'assignment se esiste
+                if assignment:
+                    db.session.delete(assignment)
+                    updated_logistics += 1 # Conta come aggiornamento
+            else:
+                # Se c'è almeno un dato, crea o aggiorna
+                if not assignment:
+                    # Crea nuovo
+                    assignment = LogisticsAssignment(
+                        order_key=order_key,
+                        autista_codice=vettore_codice,
+                        autista_nome=vettore_nome,
+                        nota_autista=nota
+                    )
+                    db.session.add(assignment)
+                    updated_logistics += 1
+                else:
+                    # Aggiorna esistente se i dati sono cambiati
+                    if assignment.autista_codice != vettore_codice or assignment.nota_autista != nota:
+                        assignment.autista_codice = vettore_codice
+                        assignment.autista_nome = vettore_nome
+                        assignment.nota_autista = nota
                         updated_logistics += 1
-                    elif order_key in app_data_store["logistics"]: # Rimuovi se deselezionato
-                        del app_data_store["logistics"][order_key]
-                        updated_logistics += 1 # Conta anche le rimozioni
-
-            elif key.startswith('nota_autista_'):
-                order_key = key.replace('nota_autista_', '')
-                processed_orders.add(order_key)
-                nota_autista = value.strip()
-
-                if current_notes.get(order_key, '') != nota_autista:
-                    if nota_autista:
-                        app_data_store["driver_notes"][order_key] = nota_autista
-                        updated_notes += 1
-                    elif order_key in app_data_store["driver_notes"]: # Rimuovi se vuota
-                        del app_data_store["driver_notes"][order_key]
-                        updated_notes += 1 # Conta rimozioni
-
-        # Pulisci assegnazioni/note per ordini non più presenti nel form (potrebbe non essere necessario)
-        # keys_to_remove_log = set(current_logistics.keys()) - processed_orders
-        # for k in keys_to_remove_log: del app_data_store["logistics"][k]
-        # keys_to_remove_notes = set(current_notes.keys()) - processed_orders
-        # for k in keys_to_remove_notes: del app_data_store["driver_notes"][k]
-
-    flash(f"Salvataggio completato. Aggiornate {updated_logistics} assegnazioni e {updated_notes} note.", "success")
+                        
+        db.session.commit()
+        flash(f"Salvataggio completato. Aggiornate {updated_logistics} assegnazioni/note.", "success")
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE [assign_all_vettori]: {e}")
+        flash(f"Errore durante il salvataggio nel database: {e}", "danger")
+    
     return redirect(url_for('trasporto'))
 
 
+# --- Calcolo Giri (Rifattorizzato per DB) ---
 @app.route('/calcola-giri')
 @login_required
 def calcola_giri():
-    """Calcola i percorsi ottimizzati usando l'indirizzo effettivo."""
+    """Calcola i percorsi ottimizzati usando l'indirizzo effettivo e salva su DB."""
     if not current_user.has_role('admin'):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
-    # --- AGGIUNTA LOG INIZIALE ---
     print("\n--- DEBUG: Avvio /calcola-giri ---")
-    # --- FINE AGGIUNTA ---
 
-    with app_data_store_lock:
-        logistics_copy = dict(app_data_store.get("logistics", {}))
-        orders_copy = dict(app_data_store.get("orders", {})) # Leggi cache ordini CORRENTE
-        calculated_routes_temp = {}
-        # Pulizia percorsi precedenti (importante)
-        app_data_store["calculated_routes"] = {}
-        print(f"DEBUG [calcola_giri]: Letti {len(orders_copy)} ordini dalla cache per il calcolo.")
-
-
-    # 1. Raggruppa ordini per vettore
-    giri_per_vettore = defaultdict(list)
-    print("DEBUG [calcola_giri]: Raggruppamento ordini per vettore...")
-    for order_key, logistic_info in logistics_copy.items():
-        if isinstance(logistic_info, dict) and 'nome' in logistic_info:
-            vettore_nome = logistic_info.get('nome', 'Sconosciuto')
-            if vettore_nome != 'Sconosciuto':
-                ordine_completo = orders_copy.get(order_key)
-                if ordine_completo:
-                    ordine_completo['_order_key'] = order_key # Aggiungi chiave per riferimento futuro
-                    giri_per_vettore[vettore_nome].append(ordine_completo)
-                    # --- AGGIUNTA LOG INDIRIZZO QUI ---
-                    print(f"  + Ordine {order_key} assegnato a {vettore_nome}. Indirizzo effettivo letto: '{ordine_completo.get('indirizzo_effettivo')}', Località: '{ordine_completo.get('localita_effettiva')}', Fonte: '{ordine_completo.get('fonte_indirizzo')}'")
-                    # --- FINE AGGIUNTA ---
-                # else: print(f"WARN [calcola_giri]: Ordine {order_key} non trovato nella cache orders.")
-        # else: print(f"WARN [calcola_giri]: Info logistiche non valide per {order_key}: {logistic_info}")
-
-    if not giri_per_vettore:
+    # 1. Recupera gli ordini assegnati dal DB
+    assignments = LogisticsAssignment.query.filter(
+        LogisticsAssignment.autista_nome.isnot(None),
+        LogisticsAssignment.autista_nome != 'Sconosciuto'
+    ).all()
+    
+    if not assignments:
         flash("Nessun ordine assegnato ai vettori.", "info")
         print("DEBUG [calcola_giri]: Nessun ordine da processare.")
         return redirect(url_for('autisti'))
+        
+    # 2. Recupera i dati degli ordini dalla cache
+    orders_map, _ = get_cached_order_data()
+    if orders_map is None:
+        flash("Errore nel caricamento dei dati degli ordini. Impossibile calcolare i giri.", "danger")
+        return redirect(url_for('autisti'))
 
-    # 2. Inizializza Google Maps Client (invariato)
+    # 3. Raggruppa ordini per vettore
+    giri_per_vettore = defaultdict(list)
+    print("DEBUG [calcola_giri]: Raggruppamento ordini per vettore...")
+    for assign in assignments:
+        ordine_completo = orders_map.get(assign.order_key)
+        if ordine_completo:
+            ordine_completo['_order_key'] = assign.order_key
+            giri_per_vettore[assign.autista_nome].append(ordine_completo)
+            print(f"  + Ordine {assign.order_key} assegnato a {assign.autista_nome}. Indirizzo: '{ordine_completo.get('indirizzo_effettivo')}'")
+        else:
+            print(f"WARN [calcola_giri]: Ordine {assign.order_key} non trovato nella cache.")
+
+    # 4. Inizializza Google Maps Client
     google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
-    # ... (controllo google_api_key e inizializzazione gmaps invariati) ...
     if not google_api_key:
-        flash("Errore: Chiave API Google Maps non configurata.", "danger"); return redirect(url_for('autisti'))
-    try: gmaps = googlemaps.Client(key=google_api_key)
-    except Exception as e: flash(f"Errore inizializzazione Google Maps: {e}", "danger"); return redirect(url_for('autisti'))
+        flash("Errore: Chiave API Google Maps non configurata.", "danger")
+        return redirect(url_for('autisti'))
+    try: 
+        gmaps = googlemaps.Client(key=google_api_key)
+    except Exception as e: 
+        flash(f"Errore inizializzazione Google Maps: {e}", "danger")
+        return redirect(url_for('autisti'))
 
-
-    # 3. Calcola percorso per ogni vettore
+    # 5. Calcola percorso per ogni vettore
     origin = os.getenv('GMAPS_ORIGIN', "Japlab, Via Ferraris, 3, 84018 Scafati SA")
     default_stop_time_min = int(os.getenv('DEFAULT_STOP_TIME_MIN', '10'))
-    total_calculated = 0; total_errors = 0
+    total_calculated = 0
+    total_errors = 0
+    
+    # Lista dei giri calcolati da salvare sul DB
+    calculated_routes_to_save = []
 
     print("DEBUG [calcola_giri]: Inizio ciclo calcolo percorsi...")
     for vettore, ordini_assegnati in giri_per_vettore.items():
         if not ordini_assegnati: continue
 
         waypoints = []
-        valid_orders_for_route = [] # Lista degli OGGETTI ordine validi per questo giro
+        valid_orders_for_route = []
         print(f"\nDEBUG [calcola_giri]: Preparo waypoints per {vettore}...")
         for o in ordini_assegnati:
-            # Usa indirizzo_effettivo e localita_effettiva LETTI PRIMA
             addr = o.get('indirizzo_effettivo', '').strip()
             loc = o.get('localita_effettiva', '').strip()
-
-            # --- LOG VERIFICA INDIRIZZO PRIMA DI AGGIUNGERE WAYPOINT ---
-            print(f"  - Controllo Ordine #{o.get('numero')}: Indirizzo='{addr}', Località='{loc}', Fonte='{o.get('fonte_indirizzo')}'")
-            # --- FINE LOG VERIFICA ---
-
             if addr and loc:
                 waypoint_str = f"{addr}, {loc}"
                 waypoints.append(waypoint_str)
-                valid_orders_for_route.append(o) # Aggiungi l'OGGETTO ordine
+                valid_orders_for_route.append(o)
                 print(f"    -> Waypoint VALIDO aggiunto: '{waypoint_str}'")
             else:
-                print(f"    -> Waypoint NON VALIDO. Ordine escluso.")
-                flash(f"Ordine #{o.get('numero')} per {vettore} escluso dal calcolo: indirizzo/località mancante.", "warning")
+                print(f"    -> Waypoint NON VALIDO. Ordine #{o.get('numero')} escluso.")
+                flash(f"Ordine #{o.get('numero')} per {vettore} escluso: indirizzo/località mancante.", "warning")
 
         if not waypoints:
-            print(f"WARN [calcola_giri]: Nessun waypoint valido trovato per {vettore}. Giro non calcolato.")
+            print(f"WARN [calcola_giri]: Nessun waypoint valido trovato per {vettore}.")
             continue
 
         partenza_prevista = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
@@ -830,29 +869,20 @@ def calcola_giri():
                 origin=origin, destination=origin, waypoints=waypoints,
                 optimize_waypoints=True, mode="driving",
             )
-            # ... (Gestione risposta directions_result invariata) ...
+            
             if not directions_result or not isinstance(directions_result, list) or not directions_result[0].get('legs'):
                 raise ValueError("Risposta API Google Maps non valida o vuota.")
 
             route = directions_result[0]
             google_waypoint_order_indices = route.get('waypoint_order', [])
-            # --- VERIFICA COSTRUZIONE tappe_ordinate_oggetti ---
-            # Assicurati che valid_orders_for_route contenga gli oggetti ordine CORRETTI
-            print(f"DEBUG [calcola_giri]: Ordine waypoint Google: {google_waypoint_order_indices}")
-            print(f"DEBUG [calcola_giri]: Numero ordini validi per il giro: {len(valid_orders_for_route)}")
+            
             tappe_ordinate_oggetti = []
             for index in google_waypoint_order_indices:
                  if 0 <= index < len(valid_orders_for_route):
-                     tappa_obj = valid_orders_for_route[index]
-                     # --- LOG INDIRIZZO SALVATO NELLA TAPPA ---
-                     print(f"  -> Aggiungo Tappa (index {index}): Ordine #{tappa_obj.get('numero')}, Indirizzo Eff: '{tappa_obj.get('indirizzo_effettivo')}', Fonte: '{tappa_obj.get('fonte_indirizzo')}'")
-                     # --- FINE LOG ---
-                     tappe_ordinate_oggetti.append(tappa_obj) # Aggiungi l'oggetto ordine così com'è
+                     tappe_ordinate_oggetti.append(valid_orders_for_route[index])
                  else:
                      print(f"ERRORE [calcola_giri]: Indice waypoint {index} non valido!")
-            # --- FINE VERIFICA ---
 
-            # ... (Calcolo distanze, tempi, orari previsti - invariato) ...
             distanza_complessiva_m = sum(leg.get('distance', {}).get('value', 0) for leg in route['legs'])
             durata_guida_sec = sum(leg.get('duration', {}).get('value', 0) for leg in route['legs'])
             tempo_soste_sec = len(tappe_ordinate_oggetti) * default_stop_time_min * 60
@@ -860,18 +890,17 @@ def calcola_giri():
             rientro_previsto = partenza_prevista + timedelta(seconds=durata_totale_stimata_sec)
 
             orario_tappa_corrente = partenza_prevista
-            for i, tappa_obj in enumerate(tappe_ordinate_oggetti): # Itera sugli oggetti ordine GIA' ORDINATI
+            for i, tappa_obj in enumerate(tappe_ordinate_oggetti):
                 if i < len(route['legs']):
                     leg_duration_sec = route['legs'][i].get('duration', {}).get('value', 0)
                     orario_tappa_corrente += timedelta(seconds=leg_duration_sec)
-                    tappa_obj['orario_previsto'] = orario_tappa_corrente.strftime('%H:%M') # AGGIUNGI orario all'oggetto ordine
+                    tappa_obj['orario_previsto'] = orario_tappa_corrente.strftime('%H:%M')
                     orario_tappa_corrente += timedelta(minutes=default_stop_time_min)
                 else:
                     tappa_obj['orario_previsto'] = "Rientro"
 
-
-            # Salva il giro (usa la lista tappe_ordinate_oggetti che contiene gli oggetti ordine arricchiti)
-            calculated_routes_temp[vettore] = {
+            # Prepara l'oggetto da salvare nel DB
+            route_data_to_save = {
                 'data': datetime.now().strftime('%d/%m/%Y'),
                 'partenza_stimata': partenza_prevista.strftime('%H:%M'),
                 'num_consegne': len(tappe_ordinate_oggetti),
@@ -880,53 +909,83 @@ def calcola_giri():
                 'tempo_soste_stimato': time.strftime("%Hh %Mm", time.gmtime(tempo_soste_sec)),
                 'tempo_totale_stimato': time.strftime("%Hh %Mm", time.gmtime(durata_totale_stimata_sec)),
                 'rientro_previsto': rientro_previsto.strftime('%H:%M'),
-                'tappe': tappe_ordinate_oggetti, # SALVA LA LISTA DI OGGETTI ORDINE CORRETTI E ARRICCHITI
+                'tappe': tappe_ordinate_oggetti, # Questa è una lista di dizionari
             }
+            
+            calculated_routes_to_save.append({
+                'autista_nome': vettore,
+                'route_data_json': json.dumps(route_data_to_save) # Serializza in JSON
+            })
+            
             print(f"INFO [calcola_giri]: Percorso calcolato con successo per {vettore}.")
             total_calculated += 1
 
-        # ... (Gestione eccezioni invariata) ...
-        except googlemaps.exceptions.ApiError as e: total_errors += 1; print(f"ERRORE API Google Maps per {vettore}: {e}"); flash(f"Errore API Google Maps per {vettore}.", "danger")
-        except ValueError as e: total_errors += 1; print(f"Errore elaborazione percorso per {vettore}: {e}"); flash(f"Errore elaborazione percorso per {vettore}.", "danger")
-        except Exception as e: total_errors += 1; print(f"Errore INASPETTATO calcolo percorso per {vettore}: {e}"); flash(f"Errore inaspettato calcolo percorso per {vettore}.", "danger")
+        except Exception as e:
+            total_errors += 1
+            print(f"ERRORE calcolo percorso per {vettore}: {e}")
+            flash(f"Errore calcolo percorso per {vettore}: {e}", "danger")
 
-
-    # 4. Aggiorna store globale
-    with app_data_store_lock:
-        app_data_store["calculated_routes"] = calculated_routes_temp
-        print("DEBUG [calcola_giri]: Aggiornato app_data_store['calculated_routes']")
+    # 6. Salva tutti i giri calcolati sul DB
+    if calculated_routes_to_save:
+        try:
+            # Pulisci i giri vecchi
+            db.session.query(CalculatedRoute).delete()
+            print("DEBUG [calcola_giri]: Vecchi giri calcolati eliminati dal DB.")
+            
+            # Aggiungi i nuovi
+            for route_data in calculated_routes_to_save:
+                route_obj = CalculatedRoute(
+                    autista_nome=route_data['autista_nome'],
+                    route_data_json=route_data['route_data_json'],
+                    last_calculated=datetime.utcnow()
+                )
+                db.session.add(route_obj)
+            
+            db.session.commit()
+            print(f"DEBUG [calcola_giri]: {len(calculated_routes_to_save)} nuovi giri salvati sul DB.")
+        except Exception as e:
+            db.session.rollback()
+            print(f"ERRORE CRITICO [calcola_giri]: Impossibile salvare i giri calcolati sul DB: {e}")
+            flash("Errore nel salvataggio dei giri calcolati.", "danger")
+            total_errors += 1
 
     flash(f"Calcolo giri completato: {total_calculated} successi, {total_errors} errori.", "info" if total_errors == 0 else "warning")
     print("--- DEBUG: Fine /calcola-giri ---\n")
     return redirect(url_for('autisti'))
 
 
-# --- Rotte Autisti e Consegne (con Lock) ---
+# --- Rotte Autisti e Consegne (Rifattorizzate per DB) ---
 
 @app.route('/autisti')
 @login_required
 def autisti():
-    """Mostra l'elenco degli autisti con giri calcolati."""
+    """Mostra l'elenco degli autisti con giri calcolati dal DB."""
     if not (current_user.has_role('admin') or current_user.has_role('autista')):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
-    # Leggi giri calcolati sotto lock
-    with app_data_store_lock:
-        # Crea una copia per il template
-        giri_calcolati = dict(app_data_store.get("calculated_routes", {}))
-
-    # Aggiungi autisti senza giro calcolato ma con ordini assegnati
-    autisti_assegnati = set()
-    with app_data_store_lock:
-        for logistic_info in app_data_store.get("logistics", {}).values():
-             if isinstance(logistic_info, dict) and logistic_info.get('nome') != 'Sconosciuto':
-                 autisti_assegnati.add(logistic_info['nome'])
-
-    autisti_senza_giro = autisti_assegnati - set(giri_calcolati.keys())
+    # Leggi giri calcolati dal DB
+    giri_calcolati_db = CalculatedRoute.query.order_by(CalculatedRoute.autista_nome).all()
+    
+    giri_calcolati_dict = {}
+    for giro in giri_calcolati_db:
+        try:
+            # Deserializza il JSON per passarlo al template
+            giri_calcolati_dict[giro.autista_nome] = json.loads(giro.route_data_json)
+        except Exception as e:
+            print(f"ERRORE [autisti]: Impossibile deserializzare giro per {giro.autista_nome}: {e}")
+            
+    # Trova autisti assegnati ma senza giro
+    autisti_assegnati = db.session.query(LogisticsAssignment.autista_nome).distinct().filter(
+        LogisticsAssignment.autista_nome.isnot(None),
+        LogisticsAssignment.autista_nome != 'Sconosciuto'
+    ).all()
+    
+    autisti_assegnati_set = {nome for (nome,) in autisti_assegnati}
+    autisti_senza_giro = autisti_assegnati_set - set(giri_calcolati_dict.keys())
 
     return render_template('autisti.html',
-                           giri=giri_calcolati,
+                           giri=giri_calcolati_dict,
                            autisti_senza_giro=sorted(list(autisti_senza_giro)),
                            active_page='autisti')
 
@@ -934,92 +993,95 @@ def autisti():
 @app.route('/consegne/<autista_nome>')
 @login_required
 def consegne_autista(autista_nome):
-    """Mostra il dettaglio del giro e delle tappe per un autista."""
-    # ... (controllo permessi iniziale invariato) ...
+    """Mostra il dettaglio del giro e delle tappe per un autista, leggendo dal DB."""
     is_admin = current_user.has_role('admin')
     is_correct_driver = current_user.has_role('autista') and current_user.nome_autista == autista_nome
     if not (is_admin or is_correct_driver):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
-    # --- AGGIUNGI DEBUG PRINT ---
     print(f"\n--- DEBUG: Preparazione dati per /consegne/{autista_nome} ---")
-    # --- FINE DEBUG PRINT ---
 
-    with app_data_store_lock:
-        giro_calcolato_orig = app_data_store.get("calculated_routes", {}).get(autista_nome)
-        giro_calcolato = dict(giro_calcolato_orig) if giro_calcolato_orig else None
-        delivery_events_copy = dict(app_data_store.get("delivery_events", {}))
-        statuses_copy = dict(app_data_store.get("statuses", {}))
-        driver_notes_copy = dict(app_data_store.get("driver_notes", {}))
-        orders_assigned_no_route = []
-        if not giro_calcolato:
-             # Se il giro non è calcolato, prendi gli ordini direttamente dalla cache orders
-             logistics_copy = dict(app_data_store.get("logistics", {}))
-             orders_copy = dict(app_data_store.get("orders", {})) # Leggi la cache ordini aggiornata
-             print(f"DEBUG: Giro non calcolato. Cerco ordini assegnati a {autista_nome} dalla cache ({len(orders_copy)} ordini totali)...")
-             for order_key, logistic_info in logistics_copy.items():
-                 if isinstance(logistic_info, dict) and logistic_info.get('nome') == autista_nome:
-                    ordine_completo = orders_copy.get(order_key)
-                    if ordine_completo:
-                        ordine_copy = dict(ordine_completo)
-                        ordine_copy['_order_key'] = order_key
-                        orders_assigned_no_route.append(ordine_copy)
-                        print(f"  + Aggiunto ordine {order_key} (senza giro)")
-             orders_assigned_no_route.sort(key=lambda x: x.get('numero', 0))
-
-
+    giro_calcolato = None
     tappe_da_mostrare = []
-    if giro_calcolato and 'tappe' in giro_calcolato:
-         print(f"DEBUG: Uso le tappe dal giro calcolato per {autista_nome}.")
-         tappe_da_mostrare = [dict(t) for t in giro_calcolato['tappe']] # Copie
-    else:
-        print(f"DEBUG: Uso la lista ordini assegnati (non da giro) per {autista_nome}.")
-        tappe_da_mostrare = orders_assigned_no_route # Già copie
+
+    # 1. Recupera il giro calcolato dal DB
+    giro_db = CalculatedRoute.query.get(autista_nome)
+    
+    if giro_db:
+        try:
+            giro_calcolato = json.loads(giro_db.route_data_json)
+            tappe_da_mostrare = giro_calcolato.get('tappe', [])
+            print(f"DEBUG: Uso le {len(tappe_da_mostrare)} tappe dal giro calcolato in DB per {autista_nome}.")
+        except Exception as e:
+            print(f"ERRORE [consegne_autista]: Impossibile deserializzare giro per {autista_nome}: {e}")
+            giro_calcolato = None
+    
+    # 2. Se il giro non è calcolato, recupera gli ordini assegnati
+    if not giro_calcolato:
+        print(f"DEBUG: Giro non calcolato. Cerco ordini assegnati a {autista_nome}...")
+        assignments = LogisticsAssignment.query.filter_by(autista_nome=autista_nome).all()
+        order_keys_assegnati = [a.order_key for a in assignments]
+        
+        if order_keys_assegnati:
+            orders_map, _ = get_cached_order_data()
+            if orders_map:
+                for key in order_keys_assegnati:
+                    ordine_completo = orders_map.get(key)
+                    if ordine_completo:
+                        ordine_completo['_order_key'] = key
+                        tappe_da_mostrare.append(ordine_completo)
+                print(f"  + Aggiunti {len(tappe_da_mostrare)} ordini (senza giro)")
+                tappe_da_mostrare.sort(key=lambda x: x.get('numero', 0))
+        
         if not tappe_da_mostrare:
             flash(f"Nessun ordine assegnato o giro calcolato trovato per {autista_nome}.", "warning")
         else:
-             flash(f"Giro non ancora calcolato per {autista_nome}. Mostro elenco ordini assegnati.", "info")
+            flash(f"Giro non ancora calcolato per {autista_nome}. Mostro elenco ordini assegnati.", "info")
 
+    # 3. Arricchisci le tappe con dati di stato dal DB
+    order_keys = [t.get('_order_key') or f"{t.get('sigla','?')}:{t.get('serie','?')}:{t.get('numero','?')}" for t in tappe_da_mostrare]
+    
+    if order_keys:
+        events_db = DeliveryEvent.query.filter(DeliveryEvent.order_key.in_(order_keys)).all()
+        events_map = {e.order_key: e for e in events_db}
+        
+        statuses_db = PickingState.query.filter(PickingState.order_key.in_(order_keys)).all()
+        statuses_map = {s.order_key: s for s in statuses_db}
+        
+        # Le note sono già negli assignment, ma le ricarichiamo per sicurezza se il giro è calcolato
+        notes_db = LogisticsAssignment.query.filter(LogisticsAssignment.order_key.in_(order_keys)).all()
+        notes_map = {n.order_key: n.nota_autista for n in notes_db}
 
-    # Arricchisci le tappe con dati di stato consegna e note
     print(f"DEBUG: Arricchimento di {len(tappe_da_mostrare)} tappe...")
     for i, tappa in enumerate(tappe_da_mostrare):
         order_key = tappa.get('_order_key')
-        if not order_key:
-            order_key = f"{tappa.get('sigla','?')}:{tappa.get('serie','?')}:{tappa.get('numero','?')}"
+        
+        evento = events_map.get(order_key)
+        status_ordine_picking = statuses_map.get(order_key)
 
-        order_id = str(tappa.get('numero'))
-        eventi = delivery_events_copy.get(order_key, {})
-        status_ordine_picking = statuses_copy.get(order_id, {})
-
-        tappa['start_time'] = eventi.get('start_time')
-        tappa['end_time'] = eventi.get('end_time')
-        # ... (calcolo durata) ...
+        tappa['start_time'] = evento.start_time_str if evento else None
+        tappa['end_time'] = evento.end_time_str if evento else None
+        
         if tappa['start_time'] and tappa['end_time']:
              try:
-                 start_dt = datetime.strptime(tappa['start_time'], '%H:%M:%S'); end_dt = datetime.strptime(tappa['end_time'], '%H:%M:%S')
-                 durata_td = end_dt - start_dt; durata_sec = durata_td.total_seconds();
+                 start_dt = datetime.strptime(tappa['start_time'], '%H:%M:%S')
+                 end_dt = datetime.strptime(tappa['end_time'], '%H:%M:%S')
+                 durata_td = end_dt - start_dt
+                 durata_sec = durata_td.total_seconds()
                  if durata_sec < 0: durata_sec += 24 * 3600
                  tappa['durata_effettiva_min'] = math.ceil(durata_sec / 60)
              except (ValueError, TypeError): tappa['durata_effettiva_min'] = None
-        else: tappa['durata_effettiva_min'] = None
+        else: 
+            tappa['durata_effettiva_min'] = None
 
-        tappa['colli_da_consegnare'] = status_ordine_picking.get('colli_totali_operatore', 'N/D')
-        tappa['nota_autista'] = driver_notes_copy.get(order_key, '')
-        # Stato consegna
+        tappa['colli_da_consegnare'] = status_ordine_picking.colli_totali_operatore if status_ordine_picking else 'N/D'
+        tappa['nota_autista'] = notes_map.get(order_key, '')
+        
         if tappa['end_time']: tappa['status_consegna'] = 'Completata'
         elif tappa['start_time']: tappa['status_consegna'] = 'In Corso'
         else: tappa['status_consegna'] = 'Da Iniziare'
 
-        # --- AGGIUNGI DEBUG PRINT PER INDIRIZZO ---
-        print(f"  - Tappa {i+1} (Ordine #{tappa.get('numero')} - Key: {order_key}):")
-        print(f"    Indirizzo Effettivo: '{tappa.get('indirizzo_effettivo')}'")
-        print(f"    Localita Effettiva: '{tappa.get('localita_effettiva')}'")
-        print(f"    Fonte Indirizzo: '{tappa.get('fonte_indirizzo')}'")
-        # --- FINE DEBUG PRINT ---
-
-        # Assicurati che i campi esistano per il template (fallback se _effettivo manca per qualche motivo)
         if 'indirizzo_effettivo' not in tappa: tappa['indirizzo_effettivo'] = tappa.get('indirizzo', 'N/D')
         if 'localita_effettiva' not in tappa: tappa['localita_effettiva'] = tappa.get('localita', 'N/D')
 
@@ -1031,30 +1093,31 @@ def consegne_autista(autista_nome):
                            tappe=tappe_da_mostrare)
 
 
-# --- Spostamento Tappe (con Lock) ---
+# --- Spostamento Tappe (Rifattorizzato per DB) ---
 @app.route('/move_tappa/<autista_nome>/<int:index>/<direction>', methods=['POST'])
 @login_required
 def move_tappa(autista_nome, index, direction):
-    """Sposta una tappa su o giù nell'ordine del giro calcolato."""
-    # Controllo autorizzazione
+    """Sposta una tappa su o giù nell'ordine del giro calcolato sul DB."""
     is_admin = current_user.has_role('admin')
     is_correct_driver = current_user.has_role('autista') and current_user.nome_autista == autista_nome
     if not (is_admin or is_correct_driver):
-        flash("Accesso non autorizzato a modificare l'ordine delle tappe.", "danger")
+        flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
     if direction not in ['up', 'down']:
-         flash("Direzione spostamento non valida.", "danger")
+         flash("Direzione non valida.", "danger")
          return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
-    # Modifica l'ordine sotto lock
-    with app_data_store_lock:
-        giro_calcolato = app_data_store.get("calculated_routes", {}).get(autista_nome)
-        if not giro_calcolato or 'tappe' not in giro_calcolato or not isinstance(giro_calcolato['tappe'], list):
-            flash("Impossibile modificare: giro non calcolato o tappe non valide.", "warning")
+    try:
+        giro_db = CalculatedRoute.query.get(autista_nome)
+        if not giro_db:
+            flash("Impossibile modificare: giro non calcolato.", "warning")
             return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
-        tappe = giro_calcolato['tappe'] # Riferimento diretto alla lista nello store
+        # Deserializza, modifica, riserializza
+        giro_data = json.loads(giro_db.route_data_json)
+        tappe = giro_data.get('tappe', [])
+        
         if not (0 <= index < len(tappe)):
             flash("Indice tappa non valido.", "danger")
             return redirect(url_for('consegne_autista', autista_nome=autista_nome))
@@ -1064,41 +1127,39 @@ def move_tappa(autista_nome, index, direction):
 
         if direction == 'up' and index > 0:
             nuovo_index = index - 1
-        elif direction == 'down' and index < len(tappe): # Lunghezza lista diminuita di 1
-            nuovo_index = index # Inserisci alla stessa posizione (che ora è quella successiva)
+        elif direction == 'down' and index < len(tappe):
+            nuovo_index = index
 
         if nuovo_index != -1 and 0 <= nuovo_index <= len(tappe):
              tappe.insert(nuovo_index, tappa_da_spostare)
-             # Non serve riassegnare tappe a giro_calcolato, è modificato per riferimento
+             giro_data['tappe'] = tappe # Reinserisci le tappe modificate
+             giro_db.route_data_json = json.dumps(giro_data) # Riserializza
+             db.session.commit() # Salva sul DB
              flash('Ordine tappe aggiornato.', 'success')
-             # FORSE: Ricalcolare orari previsti qui? O lasciare invariati?
-             # Per ora li lasciamo invariati, l'autista gestisce l'ordine reale.
         else:
-             # Reinserisci all'indice originale se lo spostamento non è valido
-             tappe.insert(index, tappa_da_spostare)
-             flash('Spostamento tappa non possibile (inizio/fine lista).', 'warning')
+             flash('Spostamento tappa non possibile.', 'warning')
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE [move_tappa]: {e}")
+        flash("Errore durante l'aggiornamento del giro.", "danger")
 
     return redirect(url_for('consegne_autista', autista_nome=autista_nome))
 
 
-# --- Start/End Consegna (con Lock e Notifica) ---
+# --- Start/End Consegna (Rifattorizzato per DB) ---
 @app.route('/consegna/start', methods=['POST'])
 @login_required
 def start_consegna():
-    """Registra l'orario di inizio di una consegna."""
-    # Controllo autorizzazione
+    """Registra l'orario di inizio di una consegna sul DB."""
     is_admin = current_user.has_role('admin')
     is_driver = current_user.has_role('autista')
     autista_nome_form = request.form.get('autista_nome')
     is_correct_driver = is_driver and current_user.nome_autista == autista_nome_form
     if not (is_admin or is_correct_driver):
-         flash("Accesso non autorizzato ad avviare la consegna.", "danger")
-         # Determina dove reindirizzare
+         flash("Accesso non autorizzato.", "danger")
          target_autista = autista_nome_form if autista_nome_form else (current_user.nome_autista if is_driver else None)
-         if target_autista:
-             return redirect(url_for('consegne_autista', autista_nome=target_autista))
-         else:
-             return redirect(url_for('dashboard'))
+         return redirect(url_for('consegne_autista', autista_nome=target_autista) if target_autista else url_for('dashboard'))
 
     order_key = request.form.get('order_key')
     if not order_key:
@@ -1107,15 +1168,23 @@ def start_consegna():
 
     timestamp_inizio = datetime.now().strftime('%H:%M:%S')
 
-    # Aggiorna evento sotto lock
-    with app_data_store_lock:
-        event = app_data_store["delivery_events"].setdefault(order_key, {})
-        # Non sovrascrivere se già iniziato
-        if 'start_time' not in event or not event['start_time']:
-            event['start_time'] = timestamp_inizio
+    try:
+        evento = DeliveryEvent.query.get(order_key)
+        if not evento:
+            evento = DeliveryEvent(order_key=order_key, start_time_str=timestamp_inizio)
+            db.session.add(evento)
+            flash(f"Consegna {order_key} iniziata alle {timestamp_inizio}.", "info")
+        elif not evento.start_time_str:
+            evento.start_time_str = timestamp_inizio
             flash(f"Consegna {order_key} iniziata alle {timestamp_inizio}.", "info")
         else:
-             flash(f"Consegna {order_key} già iniziata precedentemente.", "warning")
+            flash(f"Consegna {order_key} già iniziata precedentemente.", "warning")
+            
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE [start_consegna]: {e}")
+        flash("Errore database durante l'avvio della consegna.", "danger")
 
     return redirect(url_for('consegne_autista', autista_nome=autista_nome_form))
 
@@ -1123,19 +1192,15 @@ def start_consegna():
 @app.route('/consegna/end', methods=['POST'])
 @login_required
 def end_consegna():
-    """Registra l'orario di fine consegna e invia notifica agli admin."""
-    # Controllo autorizzazione
+    """Registra l'orario di fine consegna sul DB e invia notifica."""
     is_admin = current_user.has_role('admin')
     is_driver = current_user.has_role('autista')
     autista_nome_form = request.form.get('autista_nome')
     is_correct_driver = is_driver and current_user.nome_autista == autista_nome_form
     if not (is_admin or is_correct_driver):
-         flash("Accesso non autorizzato a terminare la consegna.", "danger")
+         flash("Accesso non autorizzato.", "danger")
          target_autista = autista_nome_form if autista_nome_form else (current_user.nome_autista if is_driver else None)
-         if target_autista:
-             return redirect(url_for('consegne_autista', autista_nome=target_autista))
-         else:
-             return redirect(url_for('dashboard'))
+         return redirect(url_for('consegne_autista', autista_nome=target_autista) if target_autista else url_for('dashboard'))
 
     order_key = request.form.get('order_key')
     if not order_key:
@@ -1143,29 +1208,35 @@ def end_consegna():
         return redirect(url_for('consegne_autista', autista_nome=autista_nome_form))
 
     timestamp_fine = datetime.now().strftime('%H:%M:%S')
-    nome_cliente_notifica = 'Cliente Sconosciuto' # Default
+    nome_cliente_notifica = 'Cliente Sconosciuto'
+    send_notification_flag = False
 
-    # Aggiorna evento e leggi nome cliente sotto lock
-    with app_data_store_lock:
-        event = app_data_store["delivery_events"].setdefault(order_key, {})
-        # Imposta fine solo se c'era un inizio e non c'è già una fine
-        if 'start_time' in event and ('end_time' not in event or not event['end_time']):
-             event['end_time'] = timestamp_fine
-             # Recupera nome cliente per notifica
-             ordine = app_data_store.get("orders", {}).get(order_key)
-             if ordine:
-                 nome_cliente_notifica = ordine.get('ragione_sociale', 'Cliente Sconosciuto')
-             flash(f"Consegna per {nome_cliente_notifica} ({order_key}) completata alle {timestamp_fine}.", "success")
-             send_notification_flag = True # Invia notifica
-        elif 'end_time' in event and event['end_time']:
-             flash(f"Consegna {order_key} già completata precedentemente.", "warning")
-             send_notification_flag = False
-        else: # Manca start_time
-             flash(f"Errore: Impossibile completare consegna {order_key} senza un orario di inizio.", "danger")
-             send_notification_flag = False
+    try:
+        evento = DeliveryEvent.query.get(order_key)
+        if not evento or not evento.start_time_str:
+            flash(f"Errore: Impossibile completare consegna {order_key} senza un orario di inizio.", "danger")
+        elif evento.end_time_str:
+            flash(f"Consegna {order_key} già completata precedentemente.", "warning")
+        else:
+            evento.end_time_str = timestamp_fine
+            db.session.commit()
+            
+            # Recupera nome cliente per notifica (dalla cache ordini)
+            orders_map, _ = get_cached_order_data()
+            if orders_map:
+                ordine = orders_map.get(order_key)
+                if ordine:
+                    nome_cliente_notifica = ordine.get('ragione_sociale', 'Cliente Sconosciuto')
+            
+            flash(f"Consegna per {nome_cliente_notifica} ({order_key}) completata alle {timestamp_fine}.", "success")
+            send_notification_flag = True
+            
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE [end_consegna]: {e}")
+        flash("Errore database durante la chiusura della consegna.", "danger")
 
-
-    # --- INVIO NOTIFICA (se consegna appena completata, fuori dal lock) ---
+    # --- INVIO NOTIFICA (fuori dalla transazione DB) ---
     if send_notification_flag:
         try:
             titolo_notifica = f"Consegna Completata ({autista_nome_form})"
@@ -1183,18 +1254,33 @@ def end_consegna():
     return redirect(url_for('consegne_autista', autista_nome=autista_nome_form))
 
 
+# --- Amministrazione (Rifattorizzato per DB) ---
 def _calculate_admin_summary_data():
     """
-    Calcola statistiche riassuntive per la dashboard admin.
-    Legge i dati dallo store globale usando un lock.
+    Calcola statistiche riassuntive per la dashboard admin, leggendo dal DB.
     """
-    with app_data_store_lock: # Blocca accesso a tutto lo store durante il calcolo
-        # Crea copie per lavorare in sicurezza
-        calculated_routes_copy = dict(app_data_store.get("calculated_routes", {}))
-        delivery_events_copy = dict(app_data_store.get("delivery_events", {}))
-        logistics_copy = dict(app_data_store.get("logistics", {}))
-        orders_copy = dict(app_data_store.get("orders", {}))
-        statuses_copy = dict(app_data_store.get("statuses", {}))
+    # Esegui le query sul DB
+    try:
+        assignments_db = LogisticsAssignment.query.all()
+        events_db = DeliveryEvent.query.all()
+        routes_db = CalculatedRoute.query.all()
+        statuses_db = PickingState.query.all()
+        
+        # Recupera dati ordini (ragione sociale, indirizzi) dalla cache
+        orders_map, _ = get_cached_order_data()
+        if orders_map is None:
+            orders_map = {} # Evita crash se API Mexal fallisce
+            print("WARN [admin_summary]: Mappa ordini vuota, i nomi dei clienti potrebbero mancare.")
+            
+    except Exception as e:
+        print(f"ERRORE CRITICO [admin_summary] query DB: {e}")
+        # Restituisci dati vuoti per evitare crash del template
+        return {}, {}, {'labels':[], 'data':[]}, []
+
+    # Mappe per un accesso rapido
+    events_map = {e.order_key: e for e in events_db}
+    statuses_map = {s.order_key: s for s in statuses_db}
+    routes_map = {r.autista_nome: json.loads(r.route_data_json) for r in routes_db}
 
     dettagli_per_autista = {}
     consegne_totali_completate = 0
@@ -1204,29 +1290,30 @@ def _calculate_admin_summary_data():
     consegne_per_ora = defaultdict(int)
 
     # Itera su TUTTE le assegnazioni logistiche
-    for order_key, logistic_info in logistics_copy.items():
-        if not isinstance(logistic_info, dict) or not logistic_info.get('nome'):
+    for assign in assignments_db:
+        autista_nome = assign.autista_nome
+        if not autista_nome or autista_nome == 'Sconosciuto':
             continue
-        autista_nome = logistic_info['nome']
-        evento = delivery_events_copy.get(order_key, {}) # Evento (può essere vuoto)
+            
+        order_key = assign.order_key
+        evento = events_map.get(order_key)
+        ordine = orders_map.get(order_key, {}) # Prendi dalla cache
+        status_ordine_picking = statuses_map.get(order_key)
 
         if autista_nome not in dettagli_per_autista:
-             giro_pianificato = calculated_routes_copy.get(autista_nome, {})
+             giro_pianificato = routes_map.get(autista_nome, {})
              dettagli_per_autista[autista_nome] = {
-                 'summary': dict(giro_pianificato),
+                 'summary': giro_pianificato, # Contiene già i dati del giro
                  'consegne': [],
                  'tempo_effettivo_sec': 0
              }
-
-        ordine = orders_copy.get(order_key)
-        if not ordine: continue
 
         status_consegna = "Assegnata"
         durata_effettiva_str = "-"
         ora_inizio = -1
 
-        start_time_str = evento.get('start_time')
-        end_time_str = evento.get('end_time')
+        start_time_str = evento.start_time_str if evento else None
+        end_time_str = evento.end_time_str if evento else None
 
         if start_time_str:
             status_consegna = "In Corso"
@@ -1255,9 +1342,6 @@ def _calculate_admin_summary_data():
                 print(f"Errore calcolo durata consegna per {order_key}: {e}")
                 pass
 
-        order_id = str(ordine.get('numero'))
-        status_ordine_picking = statuses_copy.get(order_id, {})
-
         dettaglio_consegna = {
             'ragione_sociale': ordine.get('ragione_sociale', 'N/D'),
             'indirizzo': ordine.get('indirizzo_effettivo', ordine.get('indirizzo', '-')),
@@ -1265,9 +1349,9 @@ def _calculate_admin_summary_data():
             'start_time_reale': start_time_str or '-',
             'end_time_reale': end_time_str or '-',
             'durata_effettiva': durata_effettiva_str,
-            'colli': status_ordine_picking.get('colli_totali_operatore', 'N/D'),
+            'colli': status_ordine_picking.colli_totali_operatore if status_ordine_picking else 'N/D',
             'status': status_consegna,
-            'pdf_filename': status_ordine_picking.get('pdf_filename')
+            'pdf_filename': status_ordine_picking.pdf_filename if status_ordine_picking else None
         }
         dettagli_per_autista[autista_nome]['consegne'].append(dettaglio_consegna)
 
@@ -1303,195 +1387,445 @@ def _calculate_admin_summary_data():
     conteggi_grafico = [consegne_per_ora.get(h, 0) for h in ore_grafico]
     chart_data = {'labels': [f"{h}:00" for h in ore_grafico], 'data': conteggi_grafico}
 
-    # --- NUOVA AGGIUNTA: Crea la lista di tutti i PDF ---
+    # Crea la lista di tutti i PDF (usa la mappa degli stati già caricata)
     all_generated_pdfs_list = []
-    for order_id, status_data in statuses_copy.items():
-        if status_data.get('pdf_filename'):
-            # Troviamo il nome del cliente per questo order_id
-            order_key = None
-            client_name = "Cliente Sconosciuto"
-            for key, order in orders_copy.items():
-                if str(order.get('numero')) == order_id:
-                    order_key = key
-                    client_name = order.get('ragione_sociale', 'N/D')
-                    break
-            
+    for state in statuses_db:
+        if state.pdf_filename:
+            ordine = orders_map.get(state.order_key, {})
             all_generated_pdfs_list.append({
-                'filename': status_data['pdf_filename'],
-                'client_name': client_name,
-                'order_id': order_id
+                'filename': state.pdf_filename,
+                'client_name': ordine.get('ragione_sociale', 'Cliente Sconosciuto'),
+                'order_id': state.order_id
             })
     
-    # Ordina i PDF per nome (che include la data), dal più recente
     all_generated_pdfs_list.sort(key=lambda x: x['filename'], reverse=True)
-    # --- FINE NUOVA AGGIUNTA ---
 
-    # Restituisce la nuova lista
     return summary_stats, dettagli_per_autista, chart_data, all_generated_pdfs_list
 
 
-# --- Rotta Amministrazione (Usa _calculate con Lock) ---
 @app.route('/amministrazione')
 @login_required
 def amministrazione():
-    """Pagina riepilogativa per l'amministratore."""
+    """Pagina riepilogativa per l'amministratore (legge dal DB)."""
     if not current_user.has_role('admin'):
-        flash("Accesso non autorizzato alla pagina amministrazione.", "danger")
+        flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     try:
-        # Ora riceve 4 valori di ritorno
         summary_stats, dettagli_per_autista, chart_data, pdf_list = _calculate_admin_summary_data()
     except Exception as e:
          print(f"Errore in _calculate_admin_summary_data: {e}")
+         import traceback; traceback.print_exc()
          flash("Errore durante il calcolo delle statistiche amministrative.", "danger")
          summary_stats, dettagli_per_autista, chart_data, pdf_list = {}, {}, {'labels':[], 'data':[]}, []
-
 
     return render_template('amministrazione.html',
                            summary_stats=summary_stats,
                            dettagli_per_autista=dettagli_per_autista,
                            chart_data=chart_data,
-                           pdf_list=pdf_list,  # <-- Passa la nuova lista al template
+                           pdf_list=pdf_list,
                            active_page='amministrazione')
 
 
-# --- Dettaglio Ordine (con Lock) ---
+# --- Dettaglio Ordine (Rifattorizzato per DB) ---
 @app.route('/order/<sigla>/<serie>/<numero>')
 @login_required
 def order_detail_view(sigla, serie, numero):
-    """Mostra i dettagli dell'ordine, ora con la packing list."""
+    """Mostra i dettagli dell'ordine, leggendo lo stato dal DB."""
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     order_key = f"{sigla}:{serie}:{numero}"
-    order_id = str(numero)
+    order_id = str(numero) # order_id è solo il numero
 
-    with app_data_store_lock:
-        order_data = app_data_store.get("orders", {}).get(order_key)
+    # 1. Recupera i dati dell'ordine (immutabili) dalla cache
+    orders_map, _ = get_cached_order_data()
+    if orders_map is None:
+        flash("Errore nel caricamento dei dati ordine, riprova.", "danger")
+        return redirect(url_for('ordini_list'))
         
-        # Assicurati che lo stato esista e abbia le nuove chiavi
-        if order_id not in app_data_store.get("statuses", {}):
-            app_data_store.setdefault("statuses", {})[order_id] = get_initial_status()
-        
-        order_state_orig = app_data_store.get("statuses", {}).get(order_id)
-        order_state = dict(order_state_orig) # Copia
-        
-        # Inizializza le nuove chiavi se mancano in uno stato vecchio
-        if 'picked_items' not in order_state: order_state['picked_items'] = {}
-        if 'packing_list' not in order_state: order_state['packing_list'] = []
+    order_data = orders_map.get(order_key)
 
     if not order_data:
-        # ... (Logica ricaricamento dati se ordine non in cache - invariata) ...
-        print(f"Ordine {order_key} non in cache, ricarico...")
-        flash(f"Ordine {order_key} non trovato, ricarico dati...", "info")
-        load_all_data()
-        with app_data_store_lock: # Rileggi
-             order_data = app_data_store.get("orders", {}).get(order_key)
-             order_state_orig = app_data_store.get("statuses", {}).get(order_id)
-             if order_state_orig:
-                 order_state = dict(order_state_orig)
-                 if 'picked_items' not in order_state: order_state['picked_items'] = {}
-                 if 'packing_list' not in order_state: order_state['packing_list'] = []
-             else: # Se ancora non esiste (es. ordine appena caricato)
-                 order_state = get_initial_status()
-                 app_data_store.setdefault("statuses", {})[order_id] = order_state
-        
-        if not order_data:
-             flash(f"Errore: Impossibile trovare l'ordine {order_key}.", "danger")
-             return redirect(url_for('ordini_list'))
-
-    order_copy = dict(order_data)
-
-    # Passiamo sia l'ordine (per le righe totali) sia lo stato (per la packing_list)
-    return render_template('order_detail.html',
-                           order=order_copy,
-                           state=order_state) # Contiene state['packing_list']
-
-DROPBOX_TOKEN = os.getenv('DROPBOX_ACCESS_TOKEN')
-
-def _upload_to_dropbox(file_content_bytes, file_name):
-    """Carica un file (come bytes) su Dropbox."""
+        flash(f"Errore: Impossibile trovare l'ordine {order_key}.", "danger")
+        # Invalida la cache e ricarica
+        _cache["orders_map"] = None
+        _cache["last_load_time"] = None
+        return redirect(url_for('ordini_list'))
     
-    if not DROPBOX_TOKEN:
-        print("ERRORE [DROPBOX]: DROPBOX_ACCESS_TOKEN non impostato in .env")
-        return False, "Token Dropbox non configurato"
+    # 2. Recupera lo stato (mutabile) dal DB
+    order_state_db = PickingState.query.get(order_key)
+    
+    if not order_state_db:
+        # Questo non dovrebbe succedere se load_all_data() ha funzionato
+        print(f"WARN [order_detail_view]: Stato non trovato nel DB per {order_key}. Lo creo al volo.")
+        try:
+            order_state_db = PickingState(order_key=order_key, order_id=order_id)
+            db.session.add(order_state_db)
+            db.session.commit()
+            flash("Stato ordine inizializzato.", "info")
+        except Exception as e:
+            db.session.rollback()
+            print(f"ERRORE [order_detail_view]: Impossibile creare stato per {order_key}: {e}")
+            flash("Errore critico nel DB, impossibile caricare lo stato.", "danger")
+            return redirect(url_for('ordini_list'))
+
+    # 3. Deserializza i JSON per il template
+    try:
+        packing_list = json.loads(order_state_db.packing_list_json or '[]')
+        picked_items = json.loads(order_state_db.picked_items_json or '{}')
+    except json.JSONDecodeError:
+        print(f"ERRORE [order_detail_view]: JSON corrotto nel DB per {order_key}. Resetto.")
+        packing_list = []
+        picked_items = {}
+        # Salva lo stato resettato
+        try:
+            order_state_db.packing_list_json = '[]'
+            order_state_db.picked_items_json = '{}'
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    # Crea un dizionario "state" per il template
+    order_state_dict = {
+        'status': order_state_db.status,
+        'colli_totali_operatore': order_state_db.colli_totali_operatore,
+        'pdf_filename': order_state_db.pdf_filename,
+        'packing_list': packing_list,
+        'picked_items': picked_items
+    }
+
+    return render_template('order_detail.html',
+                           order=order_data, # Dati ordine (righe, cliente...)
+                           state=order_state_dict) # Stato picking (status, packing_list...)
+
+
+# --- Funzioni API Picking (Rifattorizzate per DB) ---
+#    (Queste ora sono più complesse perché leggono e scrivono JSON dal DB)
+
+def _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code):
+    """
+    Funzione helper per aggiungere un articolo a un collo (leggendo e scrivendo dal DB).
+    """
+    order_key = f"{sigla}:{serie}:{numero}"
+    order_id = str(numero)
+
+    try:
+        # 1. Recupera lo stato dal DB
+        state = PickingState.query.get(order_key)
+        if not state:
+            return jsonify({'status': 'error', 'message': 'Stato ordine non trovato nel DB'}), 404
         
-    # Il percorso in Dropbox (es. /file.pdf)
-    dropbox_path = f"/{file_name}" 
+        # 2. Recupera i dati dell'ordine dalla cache
+        orders_map, _ = get_cached_order_data()
+        order_data = orders_map.get(order_key)
+        if not order_data:
+            return jsonify({'status': 'error', 'message': 'Dati ordine non trovati in cache'}), 404
+
+        # 3. Deserializza la packing list e il riepilogo
+        try:
+            packing_list = json.loads(state.packing_list_json or '[]')
+            picked_items = json.loads(state.picked_items_json or '{}')
+        except json.JSONDecodeError:
+            print(f"ERRORE JSON [add_item]: JSON corrotto per {order_key}. Resetto.")
+            packing_list = []
+            picked_items = {}
+
+        # 4. Verifica articolo e qta target (come prima)
+        articolo_in_ordine = False
+        target_row_id = None
+        qta_target_totale = 0.0
+        righe_ordine_originali = order_data.get('righe', [])
+        for item in righe_ordine_originali:
+            if item.get('codice_articolo') == primary_code:
+                articolo_in_ordine = True
+                target_row_id = str(item.get('id_riga'))
+                # Calcola qta target (come prima)
+                nr_colli_val = 0.0; quantita_per_collo_val = 0.0
+                if item.get('nr_colli') is not None and str(item.get('nr_colli')).strip() != '': 
+                    try: nr_colli_val = float(str(item.get('nr_colli')).replace(',', '.'))
+                    except ValueError: nr_colli_val = 0.0
+                if item.get('quantita') is not None and str(item.get('quantita')).strip() != '': 
+                    try: quantita_per_collo_val = float(str(item.get('quantita')).replace(',', '.'))
+                    except ValueError: quantita_per_collo_val = 0.0
+                qta_target_totale = (nr_colli_val * quantita_per_collo_val) if nr_colli_val > 0 else quantita_per_collo_val
+                qta_target_totale = round(qta_target_totale)
+                break
+
+        if not articolo_in_ordine:
+             return jsonify({'status': 'item_not_in_order', 'message': f"Articolo '{primary_code}' non presente in questo ordine."}), 404
+        
+        # 5. Trova (o crea) il collo
+        collo_da_aggiornare = None
+        for collo in packing_list:
+            if collo.get('collo_id') == collo_id:
+                collo_da_aggiornare = collo; break
+        
+        if not collo_da_aggiornare:
+            # Questo non dovrebbe succedere, create_new_collo dovrebbe essere chiamato prima
+            print(f"WARN [add_item]: Collo {collo_id} non trovato, creazione in corso...")
+            collo_da_aggiornare = {'collo_id': collo_id, 'items': {}}
+            packing_list.append(collo_da_aggiornare)
+            
+        # 6. Incrementa la quantità
+        if 'items' not in collo_da_aggiornare: collo_da_aggiornare['items'] = {}
+        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(primary_code, 0)
+        qta_attuale_nel_collo += 1
+        collo_da_aggiornare['items'][primary_code] = qta_attuale_nel_collo
+
+        # 7. Aggiorna il riepilogo 'picked_items'
+        qta_totale_prelevata = 0
+        for collo in packing_list:
+             qta_totale_prelevata += collo.get('items', {}).get(primary_code, 0)
+        
+        if target_row_id:
+             picked_items[target_row_id] = qta_totale_prelevata
+        
+        # 8. Verifica overpick (come prima)
+        message = f"Aggiunto 1 Pz a Collo {collo_id} (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
+        status = 'success'
+        if qta_totale_prelevata > qta_target_totale:
+            message = f"Attenzione! Qta prelevata ({int(qta_totale_prelevata)}) supera ordinato ({int(qta_target_totale)})!"
+            status = 'warning_overpick'
+        elif qta_totale_prelevata == qta_target_totale:
+             message = f"Articolo {primary_code} completato! (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
+             status = 'success_completed'
+
+        # 9. Serializza e SALVA SUL DB
+        state.packing_list_json = json.dumps(packing_list)
+        state.picked_items_json = json.dumps(picked_items)
+        db.session.commit()
+
+        # Restituisci i dati aggiornati
+        return jsonify({
+            'status': status,
+            'message': message,
+            'packing_list': packing_list,
+            'picked_items': picked_items
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE CRITICO [add_item_helper] per {order_key}: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({'status': 'error', 'message': f"Errore server: {e}"}), 500
+
+# Le tre funzioni API (scan, add, remove) chiamano l'helper, quindi non serve modificarle
+@app.route('/api/scan-barcode/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>', methods=['POST'])
+@login_required
+def scan_barcode_for_collo(sigla, serie, numero, collo_id):
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+    data = request.json
+    barcode = data.get('barcode', '').strip()
+    if not barcode:
+        return jsonify({'status': 'error', 'message': 'Barcode mancante'}), 400
+    
+    primary_code = find_article_code_by_alt_code(barcode)
+    if not primary_code:
+        temp_details = get_article_details(barcode)
+        if temp_details and temp_details.get('codice') == barcode:
+             primary_code = barcode
+        else:
+             return jsonify({'status': 'not_found', 'message': f"Articolo non trovato per barcode '{barcode}'."}), 404
+    
+    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code)
+
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/add', methods=['POST'])
+@login_required
+def add_item_to_collo_by_code(sigla, serie, numero, collo_id):
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+    data = request.json
+    article_code = data.get('article_code', '').strip()
+    if not article_code:
+        return jsonify({'status': 'error', 'message': 'Codice Articolo mancante'}), 400
+    
+    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, article_code)
+
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/create', methods=['POST'])
+@login_required
+def create_new_collo(sigla, serie, numero):
+    """Crea un nuovo collo vuoto per l'ordine (sul DB)."""
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+
+    order_key = f"{sigla}:{serie}:{numero}"
     
     try:
-        # Inizializza il client
-        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+        state = PickingState.query.get(order_key)
+        if not state:
+            return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
         
-        # Esegui l'upload, passando i bytes direttamente
-        dbx.files_upload(
-            bytes(file_content_bytes), # <--- Passa i bytes del PDF
-            dropbox_path,
-            mode=dropbox.files.WriteMode('overwrite') # 'overwrite' è più sicuro
-        )
+        packing_list = json.loads(state.packing_list_json or '[]')
         
-        print(f"SUCCESS [DROPBOX]: File {file_name} caricato.")
-        return True, file_name
+        new_collo_id = 1
+        if packing_list:
+            try:
+                max_id = max(c.get('collo_id', 0) for c in packing_list)
+                new_collo_id = max_id + 1
+            except ValueError: pass
         
-    except dropbox.exceptions.AuthError as e:
-        print(f"ERRORE CRITICO [DROPBOX] Auth: {e}")
-        return False, "Errore autenticazione Dropbox (Token errato o permessi?)"
+        new_collo = {'collo_id': new_collo_id, 'items': {}}
+        packing_list.append(new_collo)
+        
+        # Salva sul DB
+        state.packing_list_json = json.dumps(packing_list)
+        db.session.commit()
+        
+        print(f"DEBUG [create_collo]: Creato Collo {new_collo_id} per ordine {order_key}")
+        
+        return jsonify({
+            'status': 'success',
+            'new_collo_id': new_collo_id,
+            'packing_list': packing_list # Restituisce la lista aggiornata
+        })
     except Exception as e:
-        print(f"ERRORE CRITICO [DROPBOX] Upload: {e}")
-        return False, str(e)
+        db.session.rollback()
+        print(f"ERRORE [create_new_collo] per {order_key}: {e}")
+        return jsonify({'status': 'error', 'message': f'Errore server: {e}'}), 500
 
-# --- Azioni Ordine (con Lock e Notifica) ---
+@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/remove', methods=['POST'])
+@login_required
+def remove_item_from_collo(sigla, serie, numero, collo_id):
+    """Rimuove 1 pezzo di un articolo da un collo (sul DB)."""
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
+        
+    data = request.json
+    article_code = data.get('article_code')
+    if not article_code:
+         return jsonify({'status': 'error', 'message': 'Codice articolo mancante'}), 400
+
+    order_key = f"{sigla}:{serie}:{numero}"
+    print(f"Richiesta rimozione 1 pz di '{article_code}' da Collo {collo_id}, Ordine {order_key}")
+
+    try:
+        state = PickingState.query.get(order_key)
+        if not state:
+            return jsonify({'status': 'error', 'message': 'Stato ordine non trovato'}), 404
+            
+        orders_map, _ = get_cached_order_data()
+        order_data = orders_map.get(order_key, {})
+
+        packing_list = json.loads(state.packing_list_json or '[]')
+        picked_items = json.loads(state.picked_items_json or '{}')
+        
+        collo_da_aggiornare = None
+        for collo in packing_list:
+            if collo.get('collo_id') == collo_id:
+                collo_da_aggiornare = collo
+                break
+        
+        if not collo_da_aggiornare or 'items' not in collo_da_aggiornare:
+             return jsonify({'status': 'error', 'message': f"Collo {collo_id} non trovato o vuoto."}), 404
+             
+        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(article_code, 0)
+        
+        if qta_attuale_nel_collo <= 0:
+            if article_code in collo_da_aggiornare['items']:
+                 del collo_da_aggiornare['items'][article_code]
+                 state.packing_list_json = json.dumps(packing_list) # Salva la pulizia
+                 db.session.commit()
+            return jsonify({
+                'status': 'success',
+                'message': f"Articolo {article_code} non presente nel collo {collo_id}.",
+                'packing_list': packing_list,
+                'picked_items': picked_items
+            })
+            
+        # Riduci quantità di 1
+        qta_attuale_nel_collo -= 1
+        
+        if qta_attuale_nel_collo == 0:
+            del collo_da_aggiornare['items'][article_code]
+        else:
+            collo_da_aggiornare['items'][article_code] = qta_attuale_nel_collo
+        
+        # Aggiorna il riepilogo 'picked_items'
+        target_row_id = None
+        for item in order_data.get('righe', []):
+             if item.get('codice_articolo') == article_code:
+                 target_row_id = str(item.get('id_riga'))
+                 break
+
+        qta_totale_prelevata = 0
+        for collo in packing_list:
+             qta_totale_prelevata += collo.get('items', {}).get(article_code, 0)
+        
+        if target_row_id:
+             picked_items[target_row_id] = qta_totale_prelevata
+        
+        # Salva tutto sul DB
+        state.packing_list_json = json.dumps(packing_list)
+        state.picked_items_json = json.dumps(picked_items)
+        db.session.commit()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f"Rimosso 1 pz di {article_code} da Collo {collo_id}",
+            'packing_list': packing_list,
+            'picked_items': picked_items
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE [remove_item] per {order_key}: {e}")
+        return jsonify({'status': 'error', 'message': f'Errore server: {e}'}), 500
+
+# --- Azioni Ordine (Rifattorizzato per DB) ---
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
 @login_required
 def order_action(sigla, serie, numero):
     """
-    Gestisce le azioni (Start, Complete, Approve, Reject).
-    'Complete' ora legge 'packing_list' dallo stato e genera il file TXT dettagliato.
+    Gestisce le azioni (Start, Complete, Approve, Reject) sul DB.
+    'Approve' genera il file PDF e salva il nome sul DB.
     """
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     action = request.form.get('action')
-    order_id = str(numero)
     order_key = f"{sigla}:{serie}:{numero}"
+    order_id = str(numero) # Per il flash message
     order_name_notifica = f"#{order_id}"
     send_notification_flag = False
     
-    # Dati per salvataggio file (Goal 2)
-    picking_data_to_save = None
+    picking_data_to_save = None # Dati per il PDF
 
-    with app_data_store_lock:
-        current_state = app_data_store.get("statuses", {}).get(order_id)
-        if not current_state:
-            flash(f"Stato ordine {order_id} non trovato.", "danger")
+    try:
+        # Recupera lo stato dal DB
+        state = PickingState.query.get(order_key)
+        if not state:
+            flash(f"Stato ordine {order_id} non trovato nel DB.", "danger")
             return redirect(url_for('ordini_list'))
 
-        stato_precedente = current_state.get('status', 'Sconosciuto')
-        order_info = app_data_store.get("orders", {}).get(order_key, {})
+        stato_precedente = state.status
+        
+        # Recupera i dati ordine (per nome cliente e righe) dalla cache
+        orders_map, _ = get_cached_order_data()
+        order_info = orders_map.get(order_key, {})
         if order_info:
             order_name_notifica = f"#{order_id} ({order_info.get('ragione_sociale', 'N/D')})"
 
         # --- Logica Azioni ---
         if action == 'start_picking':
             if stato_precedente == 'Da Lavorare' or stato_precedente == 'In Controllo':
-                current_state['status'] = 'In Picking'
+                state.status = 'In Picking'
                 # Resetta packing list E picked_items quando si (ri)inizia
-                current_state['packing_list'] = []
-                current_state['picked_items'] = {}
-                current_state['colli_totali_operatore'] = 0 # Resetta anche colli
+                state.packing_list_json = '[]'
+                state.picked_items_json = '{}'
+                state.colli_totali_operatore = 0
+                db.session.commit()
                 flash(f"Ordine {order_name_notifica} messo 'In Picking'. Packing list resettata.", "info")
             else:
                  flash(f"Azione 'In Picking' non permessa.", "warning")
 
         elif action == 'complete_picking':
             if stato_precedente == 'In Picking':
-                current_state['status'] = 'In Controllo'
-
-                # --- RIMOZIONE: Non leggiamo più 'picked_qty_{row_id}' ---
-                # Leggiamo solo i colli totali dichiarati (come controllo)
+                state.status = 'In Controllo'
+                
                 colli_totali_str = request.form.get('colli_totali_operatore', '0')
                 try:
                     colli_totali = int(colli_totali_str) if colli_totali_str else 0
@@ -1501,42 +1835,51 @@ def order_action(sigla, serie, numero):
                      flash("Numero colli non valido.", "warning")
 
                 # Salva i colli totali dichiarati
-                current_state['colli_totali_operatore'] = colli_totali
+                state.colli_totali_operatore = colli_totali
+                db.session.commit()
+                flash(f"Packing list inviata al controllo. Colli dichiarati: {colli_totali}", "success")
+            else:
+                 flash(f"Azione 'Completa Picking' non permessa.", "warning")
 
-                # Prepara i dati per il salvataggio file (Goal 2)
-                # Ora usiamo la 'packing_list' memorizzata nello stato
+        elif action == 'approve_order':
+              if stato_precedente == 'In Controllo':
+                state.status = 'Completato'
+                # Non fare il commit qui, lo facciamo dopo aver salvato il nome del file
+                
+                # Prepara i dati per il salvataggio file
                 picking_data_to_save = {
                     "order_key": order_key,
                     "sigla": sigla, "serie": serie, "numero": numero,
                     "cliente": order_info.get('ragione_sociale', 'N/D'),
                     "operatore": current_user.id,
-                    "colli_totali_dichiarati": colli_totali,
-                    "packing_list_dettagliata": list(current_state.get('packing_list', [])), # Copia della lista
-                    "order_rows": list(order_info.get('righe', [])) # Copia delle righe per descrizioni
+                    "colli_totali_dichiarati": state.colli_totali_operatore,
+                    "packing_list_dettagliata": json.loads(state.packing_list_json or '[]'),
+                    "order_rows": list(order_info.get('righe', []))
                 }
-            else:
-                 flash(f"Azione 'Completa Picking' non permessa.", "warning")
-
-        elif action == 'approve_order':
-             if stato_precedente == 'In Controllo':
-                current_state['status'] = 'Completato'
-                flash(f"Ordine {order_name_notifica} approvato.", "success")
-                send_notification_flag = True
-             else: flash(f"Azione 'Approva Ordine' non permessa.", "warning")
+                # Il flag per la notifica e il flash verranno gestiti dopo la creazione del PDF
+              else: 
+                   flash(f"Azione 'Approva Ordine' non permessa.", "warning")
 
         elif action == 'reject_order':
-             if stato_precedente == 'In Controllo':
-                current_state['status'] = 'In Picking' # Torna in picking
+              if stato_precedente == 'In Controllo':
+                state.status = 'In Picking' # Torna in picking
+                db.session.commit()
                 flash(f"Ordine {order_name_notifica} rifiutato. Riportato a 'In Picking'.", "warning")
-             else: flash(f"Azione 'Rifiuta Ordine' non permessa.", "warning")
+              else: 
+                flash(f"Azione 'Rifiuta Ordine' non permessa.", "warning")
         else:
-             flash(f"Azione ('{action}') non riconosciuta.", "danger")
+              flash(f"Azione ('{action}') non riconosciuta.", "danger")
 
-        app_data_store.setdefault("statuses", {})[order_id] = current_state
-        print(f"DEBUG [order_action]: Ordine {order_key}, Azione '{action}', Stato Post: '{current_state.get('status')}'")
+        print(f"DEBUG [order_action]: Ordine {order_key}, Azione '{action}', Stato Post DB: '{state.status}'")
 
-    # --- FINE Blocco 'with app_data_store_lock' ---
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE CRITICO [order_action] nel DB: {e}")
+        flash(f"Errore database: {e}", "danger")
+        return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
 
+
+    # --- Blocco Creazione PDF (ORA FUORI DALLA TRANSAZIONE) ---
     if picking_data_to_save:
         pdf_bytes = None
         filename = None
@@ -1551,7 +1894,7 @@ def order_action(sigla, serie, numero):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{picking_data_to_save['sigla']}-{picking_data_to_save['serie']}-{picking_data_to_save['numero']}_{picking_data_to_save['operatore']}_{timestamp}.pdf"
 
-            # --- 3. Genera il PDF con FPDF2 ---
+            # --- 3. Genera il PDF con FPDF2 (Layout Migliorato) ---
             print(f"DEBUG [complete_picking]: Generazione PDF (fpdf2) per {filename}...")
             
             pdf = PDF(orientation="P", unit="mm", format="A4")
@@ -1563,12 +1906,10 @@ def order_action(sigla, serie, numero):
             COL_W_CODE = 42
             COL_W_DESC = 130
             
-            # Titolo
             pdf.set_font("Arial", "B", 20)
             pdf.cell(0, 12, "PACKING LIST", border=0, ln=1, align="C")
             pdf.ln(5)
 
-            # Info Header
             pdf.set_font("Arial", size=10)
             pdf.cell(95, 6, f"Ordine: {picking_data_to_save['order_key']}", ln=0)
             pdf.cell(95, 6, f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", ln=1, align="R")
@@ -1608,24 +1949,17 @@ def order_action(sigla, serie, numero):
                         qta_str = str(int(qta))
                         cod_str = f"[{codice_art}]"
                         
-                        # --- INIZIO BLOCCO CORRETTO 1 ---
-                        
-                        # Calcola l'altezza della riga
-                        pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE) # Sposta per calcolo
+                        pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE)
                         row_height = pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=0, dry_run=True, output="HEIGHT")
                         row_height = max(5, row_height)
-                        
-                        # Resetta la X all'inizio
                         pdf.set_x(pdf.l_margin) 
                         
-                        # Stampa le celle
                         pdf.set_font("Arial", "B", 9)
                         pdf.cell(COL_W_QTY, row_height, qta_str, border=0, align="L")
                         pdf.set_font("Arial", "", 9)
                         pdf.cell(COL_W_CODE, row_height, cod_str, border=0)
                         pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=1)
                         
-                        # --- FINE BLOCCO CORRETTO 1 ---
                         riepilogo_totale_articoli[codice_art] += qta
                 pdf.ln(5)
 
@@ -1648,25 +1982,17 @@ def order_action(sigla, serie, numero):
                     desc = desc_map.get(codice_art, 'N/D')
                     qta_str = str(int(qta_totale))
                     cod_str = f"[{codice_art}]"
-
-                    # --- INIZIO BLOCCO CORRETTO 2 ---
                     
-                    # Calcola l'altezza della riga
-                    pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE) # Sposta per calcolo
+                    pdf.set_x(pdf.l_margin + COL_W_QTY + COL_W_CODE)
                     row_height = pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=0, dry_run=True, output="HEIGHT")
                     row_height = max(5, row_height)
-                    
-                    # Resetta la X all'inizio
                     pdf.set_x(pdf.l_margin) 
                     
-                    # Stampa le celle
                     pdf.set_font("Arial", "B", 9)
                     pdf.cell(COL_W_QTY, row_height, qta_str, border=0, align="L")
                     pdf.set_font("Arial", "", 9)
                     pdf.cell(COL_W_CODE, row_height, cod_str, border=0)
                     pdf.multi_cell(COL_W_DESC, 5, desc, border=0, ln=1)
-
-                    # --- FINE BLOCCO CORRETTO 2 ---
 
             # --- 6. Ottieni il PDF come bytes ---
             pdf_bytes = pdf.output()
@@ -1676,36 +2002,39 @@ def order_action(sigla, serie, numero):
             upload_success, upload_message = _upload_to_dropbox(pdf_bytes, filename)
             
             if upload_success:
-                flash(f"Packing list PDF salvata su Dropbox ({filename}). In attesa di controllo.", "success")
-                
-                # --- NUOVA AGGIUNTA: Salva il nome del file nello stato ---
+                flash(f"Packing list PDF salvata su Dropbox ({filename}).", "success")
+                send_notification_flag = True # Attiva notifica solo se upload OK
+                # Ora salva il nome del file e lo stato 'Completato' sul DB
                 try:
-                    with app_data_store_lock:
-                        state_to_update = app_data_store.get("statuses", {}).get(order_id)
-                        if state_to_update:
-                            state_to_update['pdf_filename'] = filename
-                            print(f"DEBUG [order_action]: Salvato filename '{filename}' per ordine {order_key}")
+                    state = PickingState.query.get(order_key)
+                    if state:
+                        state.pdf_filename = filename
+                        state.status = 'Completato' # Imposta lo stato qui
+                        db.session.commit()
+                        print(f"DEBUG [order_action]: Salvato filename e stato 'Completato' per {order_key}")
+                    else:
+                        flash("ERRORE: Stato ordine perso dopo creazione PDF.", "danger")
                 except Exception as e_save:
-                    print(f"ERRORE [order_action]: Fallito salvataggio filename PDF: {e_save}")
+                    db.session.rollback()
+                    print(f"ERRORE [order_action]: Fallito salvataggio filename/status PDF: {e_save}")
                     flash("Errore nel salvare il riferimento al PDF.", "warning")
-                # --- FINE NUOVA AGGIUNTA ---
-
             else:
-                flash(f"ATTENZIONE: Fallito upload PDF su Dropbox ({upload_message}).", "danger")
+                flash(f"ATTENZIONE: Fallito upload PDF su Dropbox ({upload_message}). L'ordine NON è stato approvato.", "danger")
+                # Non impostiamo lo stato a 'Completato' se l'upload fallisce
 
         except Exception as e_gen:
             print(f"ERRORE CRITICO [complete_picking]: {e_gen}")
             import traceback; traceback.print_exc()
             flash("Picking completato, MA fallito generazione/upload del PDF.", "danger")
 
-        # --- 8. Salva localmente (come bytes) (invariato) ---
+        # --- 8. Salva localmente (come bytes) ---
         if pdf_bytes and filename:
             try:
                 output_folder = os.path.join(app.root_path, 'picking_lists_locali')
                 os.makedirs(output_folder, exist_ok=True)
                 filepath = os.path.join(output_folder, filename)
-                with open(filepath, 'wb') as f_local: # 'wb' per write bytes
-                    f_local.write(pdf_bytes) # Scrivi i bytes
+                with open(filepath, 'wb') as f_local:
+                    f_local.write(pdf_bytes)
                 print(f"DEBUG [complete_picking]: Backup PDF locale salvato in: {filepath}")
                 flash("File PDF salvato anche localmente come backup.", "info")
             except Exception as e_local:
@@ -1714,7 +2043,7 @@ def order_action(sigla, serie, numero):
     # --- FINE SALVATAGGIO FILE ---
 
 
-    # --- Invio notifica (se 'approve_order' - invariato) ---
+    # --- Invio notifica (se 'approve_order' è riuscito) ---
     if send_notification_flag:
         try:
             admin_users = [user for user, data in users_db.items() if 'admin' in data.get('roles', [])]
@@ -1729,26 +2058,30 @@ def order_action(sigla, serie, numero):
 
     return redirect(url_for('order_detail_view', sigla=sigla, serie=serie, numero=numero))
 
+# --- Rotte Magazzino, Clienti, Todo (Invariate) ---
+# ... (incolla qui le tue funzioni magazzino, update_alt_code_api, clienti_indirizzi, e tutte le rotte todo_...) ...
+# (Assicurati di incollare: magazzino, update_alt_code_api, clienti_indirizzi, todo_list, add_todo, toggle_todo, delete_todo)
 @app.route('/magazzino')
 @login_required
 def magazzino():
-    """Pagina di ricerca articoli nel magazzino per codice o descrizione."""
-    # ... (codice iniziale della funzione e controllo permessi invariato) ...
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        flash("Accesso non autorizzato.", "danger")
+        return redirect(url_for('dashboard'))
+    
     query = request.args.get('q', '').strip()
-    articles_list = [] # Lista finale con dettagli completi
+    articles_list = []
     error_message = None
     search_type_used = None
 
     if query:
         print(f"Ricerca magazzino per: '{query}'")
-
-        # --- Logica di ricerca per codice O descrizione (invariata) ---
         is_likely_code = ' ' not in query
-        articles_data = None # Risultati iniziali della ricerca (lista)
+        articles_data = None
+        
         if is_likely_code:
-            print("Ricerca per descrizione...")
-            articles_data = search_articles(query)
-            search_type_used = 'descrizione'
+            print("Ricerca per codice...")
+            articles_data = search_articles_by_code(query) # Funzione API specifica
+            search_type_used = 'codice'
             if articles_data is not None and not articles_data:
                  print(f"Nessun risultato per codice '{query}', tento ricerca per descrizione...")
                  articles_data = search_articles(query)
@@ -1763,34 +2096,24 @@ def magazzino():
         elif not articles_data:
              error_message = f"Nessun articolo trovato per '{query}' (cercato per {search_type_used})."
         else:
-            # --- MODIFICA: Recupera dettagli per ogni articolo trovato ---
             print(f"Trovati {len(articles_data)} articoli. Recupero dettagli...")
             processed_count = 0
             detail_errors = 0
-            for art_summary in articles_data: # Itera sui risultati della ricerca
+            for art_summary in articles_data:
                 codice_art = art_summary.get('codice')
                 if not codice_art:
-                    print(f"Articolo saltato nei risultati di ricerca per mancanza codice: {art_summary}")
                     continue
 
-                # Recupera dettagli completi (incl. cod_alt) con chiamata GET singola
                 art_details = get_article_details(codice_art)
-
-                # Crea il dizionario 'art' finale unendo summary e details
-                art = dict(art_summary) # Parti dai dati della ricerca
+                art = dict(art_summary)
 
                 if art_details:
-                    # Aggiungi/Sovrascrivi campi dai dettagli (es. cod_alt)
-                    art['cod_alternativo'] = art_details.get('cod_alternativo', '') # Aggiungi cod_alt dai dettagli
-                    # Potresti aggiornare anche altri campi se necessario
-                    # art['descrizione'] = art_details.get('descrizione', art['descrizione']) # Esempio
+                    art['cod_alternativo'] = art_details.get('cod_alternativo', '')
                 else:
-                    # Se get_article_details fallisce, imposta cod_alt a errore/vuoto
-                    art['cod_alternativo'] = 'N/D' # O un altro indicatore
+                    art['cod_alternativo'] = 'N/D'
                     detail_errors += 1
                     print(f"Errore nel recuperare dettagli per {codice_art}")
 
-                # Calcola giacenza e prezzo (come prima, ma sul dizionario 'art' finale)
                 try:
                     qta_carico = float(art.get('qta_carico', 0) or 0)
                     qta_scarico = float(art.get('qta_scarico', 0) or 0)
@@ -1805,71 +2128,222 @@ def magazzino():
                     print(f"Errore calcolo dati magazzino per articolo {codice_art}: {e}")
                     art['giacenza_netta'] = 'Errore'
                     art['prezzo'] = 'Errore'
-                    # Mantieni cod_alt come 'N/D' o il valore trovato
 
-                articles_list.append(art) # Aggiungi l'articolo arricchito alla lista finale
-            # --- FINE MODIFICA ---
-            print(f"Dettagli recuperati per {processed_count} articoli ({detail_errors} errori nel recupero dettagli).")
+                articles_list.append(art)
+            
+            print(f"Dettagli recuperati per {processed_count} articoli ({detail_errors} errori).")
             if detail_errors > 0:
                  flash(f"Attenzione: Non è stato possibile recuperare i dettagli per {detail_errors} articoli.", "warning")
 
     if error_message:
         flash(error_message, "warning")
 
-    # Passa la lista finale 'articles_list' (che ora contiene 'cod_alt')
     return render_template('magazzino.html',
                            query=query,
                            articles=articles_list,
                            active_page='magazzino')
 
-# --- API Barcode (OK) ---
-@app.route('/api/find-by-barcode', methods=['POST'])
+@app.route('/api/update-alt-code', methods=['POST'])
 @login_required
-def find_by_barcode():
-    """API endpoint per trovare il codice articolo primario da un barcode (alias)."""
+def update_alt_code_api():
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
         return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-
     data = request.json
-    if not data or 'barcode' not in data:
-        return jsonify({'status': 'error', 'message': 'Dati mancanti (barcode)'}), 400
-
-    barcode = data['barcode'].strip()
-    if not barcode:
-        return jsonify({'status': 'error', 'message': 'Barcode vuoto fornito'}), 400
-
-    print(f"Ricerca API per barcode: {barcode}")
-    primary_code = get_article_by_alias(barcode) # Gestisce errori API interni
-
-    if primary_code:
-        print(f"Barcode {barcode} trovato, codice primario: {primary_code}")
-        return jsonify({'status': 'success', 'primary_code': primary_code})
+    article_code = data.get('article_code')
+    alt_code = data.get('alt_code')
+    if not article_code or alt_code is None:
+        return jsonify({'status': 'error', 'message': 'Dati mancanti.'}), 400
+    
+    success = update_article_alt_code(article_code, alt_code)
+    
+    if success:
+        return jsonify({'status': 'success', 'message': 'Codice alternativo aggiornato.'})
     else:
-        # Potrebbe essere "non trovato" o errore API
-        print(f"Barcode {barcode} non trovato o errore API.")
-        return jsonify({'status': 'not_found', 'message': 'Codice a barre non trovato o errore API.'}), 404
+        return jsonify({'status': 'error', 'message': 'Errore API Mexal.'}), 500
 
+@app.route('/clienti_indirizzi')
+@login_required
+def clienti_indirizzi():
+    if not current_user.has_role('admin'):
+        flash("Accesso non autorizzato.", "danger")
+        return redirect(url_for('dashboard'))
+    clients = get_all_clients()
+    if clients is None:
+        flash("Errore nel recupero clienti.", "danger")
+        clients = []
+    all_addresses = get_all_shipping_addresses()
+    if all_addresses is None:
+        flash("Errore nel recupero indirizzi.", "warning")
+        all_addresses = []
+    
+    addresses_by_client = defaultdict(list)
+    for addr in all_addresses:
+        client_code = addr.get('cod_conto')
+        if client_code:
+            addresses_by_client[client_code].append(addr)
+    
+    clients.sort(key=lambda c: c.get('ragione_sociale', '').lower())
+    
+    return render_template('clienti_indirizzi.html',
+                           clients=clients,
+                           addresses_map=addresses_by_client,
+                           active_page='clienti_indirizzi')
 
-# --- Fabbisogno (con fix indentazione) ---
+@app.route('/todo')
+@login_required
+def todo_list():
+    try:
+        incomplete_tasks = TodoItem.query.filter_by(is_completed=False).order_by(TodoItem.created_at.desc()).all()
+        completed_tasks = TodoItem.query.filter_by(is_completed=True).order_by(TodoItem.completed_at.desc()).all()
+    except Exception as e:
+        print(f"Errore DB leggendo ToDo: {e}")
+        flash("Errore nel caricamento delle cose da fare.", "danger")
+        incomplete_tasks = []
+        completed_tasks = []
+    
+    assignable_users = sorted(list(users_db.keys()))
+    return render_template('todo.html',
+                           incomplete_tasks=incomplete_tasks,
+                           completed_tasks=completed_tasks,
+                           assignable_users=assignable_users,
+                           active_page='todo')
+
+@app.route('/todo/add', methods=['POST'])
+@login_required
+def add_todo():
+    description = request.form.get('description', '').strip()
+    assigned_user = request.form.get('assign_to')
+    creator_id = current_user.id
+    if assigned_user == "": assigned_user = None
+
+    if not description:
+        flash("La descrizione non può essere vuota.", "warning")
+    else:
+        try:
+            new_task = TodoItem(created_by=creator_id,
+                                description=description,
+                                assigned_to=assigned_user)
+            db.session.add(new_task)
+            db.session.commit()
+            flash(f"Nuova cosa da fare aggiunta{(' e assegnata a ' + assigned_user) if assigned_user else ''}!", "success")
+            
+            try:
+                description_short = (description[:40] + '...') if len(description) > 40 else description
+                send_push_notification(creator_id, "Nuova Task Aggiunta", f"Hai aggiunto: '{description_short}'")
+                if assigned_user and assigned_user != creator_id:
+                    send_push_notification(assigned_user, "Nuova Task Assegnata", f"Ti è stata assegnata: '{description_short}' da {creator_id}")
+            except Exception as notify_err: print(f"ERRORE [add_todo]: Fallito invio notifica: {notify_err}")
+        
+        except Exception as e:
+            db.session.rollback()
+            print(f"ERRORE CRITICO [add_todo]: {e}")
+            flash("Errore durante l'aggiunta.", "danger")
+    return redirect(url_for('todo_list'))
+
+@app.route('/todo/toggle/<int:item_id>', methods=['POST'])
+@login_required
+def toggle_todo(item_id):
+    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
+        flash("Non hai i permessi per modificare lo stato.", "warning")
+        return redirect(url_for('todo_list'))
+    
+    completer_id = current_user.id
+    try:
+        task = TodoItem.query.get(item_id)
+        if task:
+            if task.is_completed:
+                task.is_completed = False
+                task.completed_at = None
+                task.completed_by = None
+                action_msg = "riaperta"
+                flash_cat = "info"
+            else:
+                task.is_completed = True
+                task.completed_at = datetime.utcnow()
+                task.completed_by = completer_id
+                action_msg = "completata"
+                flash_cat = "success"
+            db.session.commit()
+            flash(f"'{task.description[:30]}...' {action_msg}!", flash_cat)
+        else:
+            flash("Operazione non trovata.", "warning")
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE CRITICO [toggle_todo]: {e}")
+        flash("Errore durante l'aggiornamento.", "danger")
+    return redirect(url_for('todo_list'))
+
+@app.route('/todo/delete/<int:item_id>', methods=['POST'])
+@login_required
+def delete_todo(item_id):
+    if not current_user.has_role('admin'):
+        flash("Non hai i permessi per eliminare.", "warning")
+        return redirect(url_for('todo_list'))
+    
+    try:
+        task = TodoItem.query.get(item_id)
+        if task:
+            description_short = task.description[:30]
+            db.session.delete(task)
+            db.session.commit()
+            flash(f"'{description_short}...' eliminata.", "success")
+        else:
+            flash("Operazione non trovata.", "warning")
+    except Exception as e:
+        db.session.rollback()
+        print(f"ERRORE CRITICO [delete_todo]: {e}")
+        flash("Errore durante l'eliminazione.", "danger")
+    return redirect(url_for('todo_list'))
+
+def get_cached_article_group(codice):
+    """
+    Funzione helper per il caching "lazy" dei gruppi merceologici.
+    Chiama l'API solo se il codice non è già in cache.
+    """
+    # 1. Prova a leggere dalla cache in memoria
+    if codice in _article_details_cache:
+        return _article_details_cache[codice]
+    
+    # 2. Se non c'è, chiama l'API (questo accadrà solo la prima volta)
+    print(f"Fabbisogno (Cache Miss): Chiamata API per dettagli art: {codice}")
+    details = get_article_details(codice)
+    
+    # 3. Salva in cache e restituisci
+    if details and details.get('cod_grp_merc'):
+        gruppo = details['cod_grp_merc'] or 'Nessun Gruppo'
+    else:
+        gruppo = 'Nessun Gruppo'
+        
+    _article_details_cache[codice] = gruppo
+    return gruppo
+
 @app.route('/fabbisogno')
 @login_required
 def fabbisogno():
     """
-    Calcola il fabbisogno giornaliero raggruppato per
-    Gruppo Merceologico -> Articolo -> Clienti.
+    Calcola il fabbisogno giornaliero e lo SMISTA in 5 gruppi
+    per l'interfaccia a schede.
+    (Modificato per sommare i COLLI, non le quantità)
     """
     if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
         flash("Accesso non autorizzato.", "danger")
         return redirect(url_for('dashboard'))
 
     giorno_filtro = request.args.get('giorno_filtro', '').strip()
-    grouped_data = {}
     data_selezionata_formattata = ''
     error_message = None
+    
+    # Dizionari per ogni scheda
+    data_pesce = OrderedDict()
+    data_frutti = OrderedDict()
+    data_gelo = OrderedDict()
+    data_secco = OrderedDict()
+    data_altri = OrderedDict()
 
     if giorno_filtro:
-        orders_list_copy = load_all_data()
-        if orders_list_copy is None:
+        orders_map, _ = get_cached_order_data()
+        
+        if orders_map is None:
             error_message = "Errore API: Impossibile caricare gli ordini."
         else:
             try:
@@ -1880,7 +2354,7 @@ def fabbisogno():
                 print(f"Fabbisogno: Filtro per giorno che termina con: '{giorno_da_cercare}'")
                 
                 ordini_del_giorno = [
-                    o for o in orders_list_copy
+                    o for o in orders_map.values()
                     if isinstance(o.get('data_documento'), str) and len(o['data_documento']) == 8 and o['data_documento'].endswith(giorno_da_cercare)
                 ]
 
@@ -1888,8 +2362,9 @@ def fabbisogno():
                      error_message = f"Nessun ordine trovato per il giorno '{giorno_filtro}'."
                 else:
                     print(f"Fabbisogno: Trovati {len(ordini_del_giorno)} ordini. Inizio aggregazione...")
-                    article_group_cache = {}
                     
+                    # 1. Aggregazione
+                    grouped_data = {} # Dizionario temporaneo
                     for order in ordini_del_giorno:
                         cliente = order.get('ragione_sociale', 'Cliente Sconosciuto')
                         
@@ -1897,560 +2372,86 @@ def fabbisogno():
                             codice = item.get('codice_articolo')
                             if not codice: continue
 
-                            if codice not in article_group_cache:
-                                print(f"Fabbisogno: Chiamata API per dettagli art: {codice}")
-                                details = get_article_details(codice)
-                                if details and details.get('cod_grp_merc'):
-                                     article_group_cache[codice] = details['cod_grp_merc'] or 'Nessun Gruppo'
-                                else:
-                                     article_group_cache[codice] = 'Nessun Gruppo'
-                            gruppo = article_group_cache[codice]
+                            gruppo = get_cached_article_group(codice)
 
-                            try: qta = float(item.get('quantita', 0) or 0)
-                            except (ValueError, TypeError): qta = 0.0
+                            # --- MODIFICA LOGICA DI SOMMA ---
+                            try: 
+                                # Sommiamo i COLLI (nr_colli)
+                                colli_val = float(str(item.get('nr_colli', 0) or 0).replace(',', '.'))
+                                # Prendiamo la QTA PER COLLO (quantita)
+                                qta_val = float(str(item.get('quantita', 0) or 0).replace(',', '.'))
+                            except (ValueError, TypeError): 
+                                colli_val = 0.0
+                                qta_val = 0.0
 
-                            if qta > 0:
+                            # Se non ci sono colli, non mostriamo nulla
+                            if colli_val > 0:
                                 if gruppo not in grouped_data: grouped_data[gruppo] = {}
                                 if codice not in grouped_data[gruppo]:
                                     grouped_data[gruppo][codice] = {
                                         'descrizione': item.get('descr_articolo', 'N/D'),
-                                        'totale': 0.0,
+                                        'totale_colli': 0.0,
+                                        'qta_per_collo': qta_val, # Assumiamo sia costante
                                         'clienti': defaultdict(float)
                                     }
-                                grouped_data[gruppo][codice]['totale'] += qta
-                                grouped_data[gruppo][codice]['clienti'][cliente] += qta
+                                
+                                grouped_data[gruppo][codice]['totale_colli'] += colli_val
+                                grouped_data[gruppo][codice]['clienti'][cliente] += colli_val
+                                # Se la qta per collo è 0 in questa riga, ma era 0 anche prima, prova a prenderla
+                                if grouped_data[gruppo][codice]['qta_per_collo'] == 0 and qta_val > 0:
+                                    grouped_data[gruppo][codice]['qta_per_collo'] = qta_val
+                            # --- FINE MODIFICA LOGICA DI SOMMA ---
 
-                    data_selezionata_formattata = f"Giorno: {giorno_filtro}"
-                    print("Fabbisogno: Aggregazione completata.")
-
-                    # --- NUOVA MODIFICA: Ordina gli articoli all'interno di ogni gruppo ---
-                    # Itera attraverso i gruppi appena creati
-                    for gruppo, articoli_dict in grouped_data.items():
-                        # Converte il dizionario di articoli (es. {'ART001': {...}, 'ART002': {...}})
-                        # in una lista di tuple (es. [('ART001', {...}), ('ART002', {...})])
-                        # e la ordina usando la chiave 'totale' (item[1]['totale']) in ordine decrescente (reverse=True)
+                    print("Fabbisogno: Aggregazione completata. Inizio smistamento schede...")
+                    
+                    # 2. Smistamento nelle 5 schede
+                    for gruppo, articoli_dict in sorted(grouped_data.items()):
                         sorted_articoli_list = sorted(
                             articoli_dict.items(),
-                            key=lambda item: item[1].get('totale', 0), # Usa .get() per sicurezza
-                            reverse=True # Ordine decrescente (dal più alto al più basso)
+                            key=lambda item: item[1].get('totale_colli', 0), # Ordina per totale_colli
+                            reverse=True 
                         )
-                        # Ricrea il dizionario degli articoli per quel gruppo come OrderedDict
-                        # per mantenere l'ordine appena stabilito.
-                        grouped_data[gruppo] = OrderedDict(sorted_articoli_list)
-                    # --- FINE NUOVA MODIFICA ---
+                        articoli_ordinati = OrderedDict(sorted_articoli_list)
+
+                        if gruppo in GRUPPI_PESCE:
+                            data_pesce[gruppo] = articoli_ordinati
+                        elif gruppo in GRUPPI_FRUTTI:
+                            data_frutti[gruppo] = articoli_ordinati
+                        elif gruppo in GRUPPI_GELO:
+                            data_gelo[gruppo] = articoli_ordinati
+                        elif gruppo in GRUPPI_SECCO:
+                            data_secco[gruppo] = articoli_ordinati
+                        else:
+                            data_altri[gruppo] = articoli_ordinati
+                    
+                    data_selezionata_formattata = f"Giorno: {giorno_filtro}"
+                    print("Fabbisogno: Smistamento completato.")
 
             except ValueError as e:
                 error_message = f"Filtro giorno non valido: {e}."
-                print(f"Errore filtro giorno: {e}")
             except Exception as e:
                  print(f"Errore inatteso durante calcolo fabbisogno: {e}")
-                 import traceback
-                 traceback.print_exc()
+                 import traceback; traceback.print_exc()
                  error_message = "Si è verificato un errore durante il calcolo."
 
     if error_message: flash(error_message, "warning")
 
-    # Ordina i gruppi (già presente)
-    sorted_grouped_data = OrderedDict(sorted(grouped_data.items()))
-
     return render_template('fabbisogno.html',
-                           grouped_data=sorted_grouped_data, # Passa i dati doppiamente ordinati
                            giorno_selezionato=giorno_filtro,
                            data_selezionata_formattata=data_selezionata_formattata,
+                           # Passiamo i 5 dizionari al template
+                           data_pesce=data_pesce,
+                           data_frutti=data_frutti,
+                           data_gelo=data_gelo,
+                           data_secco=data_secco,
+                           data_altri=data_altri,
                            active_page='fabbisogno')
-
-def _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code):
-    """
-    Funzione helper privata per aggiungere un articolo (identificato da primary_code)
-    a un collo, aggiornando lo stato globale in modo sicuro.
-    """
-    order_key = f"{sigla}:{serie}:{numero}"
-    order_id = str(numero)
-
-    # 2. Aggiorna la packing_list (sotto lock)
-    with app_data_store_lock:
-        order_data = app_data_store.get("orders", {}).get(order_key)
-        order_status = app_data_store.get("statuses", {}).get(order_id)
-        if not order_data or not order_status: 
-            return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
-        
-        if 'packing_list' not in order_status or not isinstance(order_status['packing_list'], list):
-             order_status['packing_list'] = []
-
-        # 3. Verifica se l'articolo è nell'ordine e calcola qta target
-        articolo_in_ordine = False
-        target_row_id = None
-        qta_target_totale = 0.0 # Pezzi totali ordinati
-        
-        righe_ordine_originali = order_data.get('righe', [])
-        for item in righe_ordine_originali:
-            if item.get('codice_articolo') == primary_code:
-                articolo_in_ordine = True
-                target_row_id = str(item.get('id_riga'))
-                # Calcola qta target totale (Pezzi Totali) - Logica corretta
-                nr_colli_val = 0.0; quantita_per_collo_val = 0.0
-                if item.get('nr_colli') is not None and str(item.get('nr_colli')).strip() != '': 
-                    try: nr_colli_val = float(str(item.get('nr_colli')).replace(',', '.'))
-                    except ValueError: nr_colli_val = 0.0
-                if item.get('quantita') is not None and str(item.get('quantita')).strip() != '': 
-                    try: quantita_per_collo_val = float(str(item.get('quantita')).replace(',', '.'))
-                    except ValueError: quantita_per_collo_val = 0.0
-                qta_target_totale = (nr_colli_val * quantita_per_collo_val) if nr_colli_val > 0 else quantita_per_collo_val
-                qta_target_totale = round(qta_target_totale) # Arrotonda a pezzi interi
-                break
-
-        if not articolo_in_ordine:
-             print(f"Articolo '{primary_code}' non trovato nelle righe dell'ordine {order_key}.")
-             return jsonify({'status': 'item_not_in_order', 'message': f"Articolo '{primary_code}' non presente in questo ordine."}), 404
-        
-        # 4. Trova (o crea) il collo
-        collo_da_aggiornare = None
-        for collo in order_status['packing_list']:
-            if collo.get('collo_id') == collo_id:
-                collo_da_aggiornare = collo; break
-        
-        if not collo_da_aggiornare:
-            # Questo non dovrebbe succedere se si usa 'Aggiungi Collo', ma per sicurezza
-            print(f"WARN [add_item]: Collo {collo_id} non trovato, creazione in corso...")
-            collo_da_aggiornare = {'collo_id': collo_id, 'items': {}}
-            order_status['packing_list'].append(collo_da_aggiornare)
-            
-        # 5. Incrementa la quantità dell'articolo nel collo di 1
-        if 'items' not in collo_da_aggiornare: collo_da_aggiornare['items'] = {}
-        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(primary_code, 0)
-        qta_attuale_nel_collo += 1
-        collo_da_aggiornare['items'][primary_code] = qta_attuale_nel_collo
-        print(f"Articolo '{primary_code}' aggiunto a Collo {collo_id}. Qta in collo: {qta_attuale_nel_collo}")
-
-        # 6. Aggiorna il riepilogo 'picked_items' (Totale in tutti i colli)
-        qta_totale_prelevata = 0
-        for collo in order_status['packing_list']:
-             qta_totale_prelevata += collo.get('items', {}).get(primary_code, 0)
-        
-        if target_row_id:
-             if 'picked_items' not in order_status: order_status['picked_items'] = {}
-             order_status['picked_items'][target_row_id] = qta_totale_prelevata
-             print(f"Riepilogo 'picked_items' per riga {target_row_id} aggiornato a {qta_totale_prelevata} (Totale Pz Ordinati: {qta_target_totale})")
-        
-        # 7. Verifica se supera l'ordinato (Warning)
-        message = f"Aggiunto 1 Pz a Collo {collo_id} (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
-        status = 'success'
-        if qta_totale_prelevata > qta_target_totale:
-            message = f"Attenzione! Qta prelevata ({int(qta_totale_prelevata)}) supera ordinato ({int(qta_target_totale)})!"
-            status = 'warning_overpick'
-        elif qta_totale_prelevata == qta_target_totale:
-             message = f"Articolo {primary_code} completato! (Tot. {int(qta_totale_prelevata)}/{int(qta_target_totale)} Pz)"
-             status = 'success_completed'
-
-        # Restituisci la packing list aggiornata e il riepilogo
-        return jsonify({
-            'status': status,
-            'message': message,
-            'packing_list': order_status['packing_list'],
-            'picked_items': order_status['picked_items']
-        })
-
-@app.route('/api/scan-barcode/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>', methods=['POST'])
-@login_required
-def scan_barcode_for_collo(sigla, serie, numero, collo_id):
-    """
-    Gestisce la scansione (add 1) da BARCODE a un COLLO specifico.
-    Accetta solo 'barcode'.
-    """
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-
-    data = request.json
-    barcode = data.get('barcode', '').strip()
-    
-    if not barcode:
-        return jsonify({'status': 'error', 'message': 'Barcode mancante'}), 400
-
-    print(f"Ricevuto barcode '{barcode}' per ordine {sigla}:{serie}:{numero}, Collo ID: {collo_id}")
-    
-    # --- Logica 1: Trova codice primario da Barcode ---
-    primary_code = find_article_code_by_alt_code(barcode)
-    if not primary_code:
-        # Controlla se il barcode è esso stesso un codice primario
-        temp_details = get_article_details(barcode)
-        if temp_details and temp_details.get('codice') == barcode:
-             print(f"Info: Barcode '{barcode}' è un codice articolo primario.")
-             primary_code = barcode
-        else:
-             print(f"Barcode '{barcode}' non trovato.")
-             return jsonify({'status': 'not_found', 'message': f"Articolo non trovato per barcode '{barcode}'."}), 404
-    
-    print(f"Barcode '{barcode}' corrisponde a codice primario '{primary_code}'")
-
-    # Chiama la funzione helper condivisa
-    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code)
-
-@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/add', methods=['POST'])
-@login_required
-def add_item_to_collo_by_code(sigla, serie, numero, collo_id):
-    """
-    Gestisce l'aggiunta manuale (+1) da bottone a un COLLO specifico.
-    Accetta solo 'article_code'.
-    """
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-
-    data = request.json
-    article_code = data.get('article_code', '').strip() # Legge solo article_code
-    
-    if not article_code:
-        return jsonify({'status': 'error', 'message': 'Codice Articolo mancante'}), 400
-    
-    print(f"Ricevuto article_code '{article_code}' per ordine {sigla}:{serie}:{numero}, Collo ID: {collo_id}")
-    
-    # Per questa rotta, l'article_code è il primary_code
-    primary_code = article_code
-
-    # Chiama la funzione helper condivisa
-    return _add_item_to_collo_helper(sigla, serie, numero, collo_id, primary_code)
-
-@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/create', methods=['POST'])
-@login_required
-def create_new_collo(sigla, serie, numero):
-    """Crea un nuovo collo vuoto per l'ordine."""
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-
-    order_id = str(numero)
-    with app_data_store_lock:
-        order_status = app_data_store.get("statuses", {}).get(order_id)
-        if not order_status: return jsonify({'status': 'error', 'message': 'Ordine non trovato'}), 404
-        
-        if 'packing_list' not in order_status or not isinstance(order_status['packing_list'], list):
-             order_status['packing_list'] = []
-        
-        # Trova l'ID più alto e aggiungi 1
-        new_collo_id = 1
-        if order_status['packing_list']:
-            try:
-                max_id = max(c.get('collo_id', 0) for c in order_status['packing_list'])
-                new_collo_id = max_id + 1
-            except ValueError:
-                 pass # Lascia 1
-        
-        # Aggiungi il nuovo collo vuoto
-        new_collo = {'collo_id': new_collo_id, 'items': {}}
-        order_status['packing_list'].append(new_collo)
-        
-        print(f"DEBUG [create_collo]: Creato Collo {new_collo_id} per ordine {order_id}")
-        
-        return jsonify({
-            'status': 'success',
-            'new_collo_id': new_collo_id,
-            'packing_list': order_status['packing_list']
-        })
-
-@app.route('/api/order/<sigla>/<int:serie>/<int:numero>/collo/<int:collo_id>/item/remove', methods=['POST'])
-@login_required
-def remove_item_from_collo(sigla, serie, numero, collo_id):
-    """Rimuove 1 pezzo di un articolo da un collo specifico."""
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-        
-    data = request.json
-    article_code = data.get('article_code') # Riceve il CODICE ARTICOLO, non il barcode
-    if not article_code:
-         return jsonify({'status': 'error', 'message': 'Codice articolo mancante'}), 400
-
-    order_id = str(numero)
-    order_key = f"{sigla}:{serie}:{numero}"
-    print(f"Richiesta rimozione 1 pz di '{article_code}' da Collo {collo_id}, Ordine {order_key}")
-
-    with app_data_store_lock:
-        order_status = app_data_store.get("statuses", {}).get(order_id)
-        if not order_status or 'packing_list' not in order_status:
-            return jsonify({'status': 'error', 'message': 'Ordine o packing list non trovata'}), 404
-
-        collo_da_aggiornare = None
-        for collo in order_status['packing_list']:
-            if collo.get('collo_id') == collo_id:
-                collo_da_aggiornare = collo
-                break
-        
-        if not collo_da_aggiornare or not collo_da_aggiornare.get('items'):
-             return jsonify({'status': 'error', 'message': f"Collo {collo_id} non trovato o vuoto."}), 404
-             
-        qta_attuale_nel_collo = collo_da_aggiornare['items'].get(article_code, 0)
-        
-        if qta_attuale_nel_collo <= 0:
-            # L'articolo non è (o non è più) in questo collo
-            print(f"Articolo {article_code} non presente nel collo {collo_id}.")
-            # Rimuovi la chiave se esiste ma è a 0
-            if article_code in collo_da_aggiornare['items']:
-                 del collo_da_aggiornare['items'][article_code]
-            qta_totale_prelevata_zero = 0 # Calcola comunque il riepilogo
-            for c in order_status['packing_list']: qta_totale_prelevata_zero += c.get('items', {}).get(article_code, 0)
-            target_row_id_zero = None
-            order_info_zero = app_data_store.get("orders", {}).get(order_key, {})
-            for item in order_info_zero.get('righe', []):
-                 if item.get('codice_articolo') == article_code: target_row_id_zero = str(item.get('id_riga')); break
-            if target_row_id_zero: order_status.setdefault('picked_items', {})[target_row_id_zero] = qta_totale_prelevata_zero
-
-            return jsonify({
-                'status': 'success', # Successo, anche se la qta era già 0
-                'message': f"Articolo {article_code} non presente nel collo {collo_id}.",
-                'packing_list': order_status['packing_list'],
-                'picked_items': order_status.get('picked_items', {})
-            })
-            
-        # Riduci quantità di 1
-        qta_attuale_nel_collo -= 1
-        
-        if qta_attuale_nel_collo == 0:
-            del collo_da_aggiornare['items'][article_code] # Rimuovi se 0
-        else:
-            collo_da_aggiornare['items'][article_code] = qta_attuale_nel_collo
-        
-        print(f"Articolo '{article_code}' rimosso da Collo {collo_id}. Qta rimasta nel collo: {qta_attuale_nel_collo}")
-
-        # Aggiorna il riepilogo 'picked_items' (Totale in tutti i colli)
-        target_row_id = None
-        order_info = app_data_store.get("orders", {}).get(order_key, {})
-        for item in order_info.get('righe', []):
-             if item.get('codice_articolo') == article_code:
-                 target_row_id = str(item.get('id_riga'))
-                 break
-
-        qta_totale_prelevata = 0
-        for collo in order_status['packing_list']:
-             qta_totale_prelevata += collo.get('items', {}).get(article_code, 0)
-        
-        if target_row_id:
-             if 'picked_items' not in order_status: order_status['picked_items'] = {}
-             order_status['picked_items'][target_row_id] = qta_totale_prelevata
-             print(f"Riepilogo 'picked_items' per riga {target_row_id} aggiornato a {qta_totale_prelevata}")
-        
-        return jsonify({
-            'status': 'success',
-            'message': f"Rimosso 1 pz di {article_code} da Collo {collo_id}",
-            'packing_list': order_status['packing_list'],
-            'picked_items': order_status['picked_items']
-        })
-
-# --- FINE NUOVE API COLLI ---
-
-        
-@app.route('/api/update-alt-code', methods=['POST'])
-@login_required
-def update_alt_code_api():
-    """API endpoint per aggiornare il codice alternativo di un articolo."""
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        return jsonify({'status': 'error', 'message': 'Accesso non autorizzato'}), 403
-
-    data = request.json
-    article_code = data.get('article_code')
-    alt_code = data.get('alt_code') # Può essere stringa vuota per cancellare
-
-    # Controlla che article_code sia presente e alt_code sia definito (anche se None o vuoto)
-    if not article_code or alt_code is None:
-        print("ERRORE API update_alt_code: Dati mancanti nella richiesta.")
-        return jsonify({'status': 'error', 'message': 'Codice articolo o nuovo codice alternativo mancante.'}), 400
-
-    print(f"Richiesta API per aggiornare cod_alternativo di '{article_code}' a '{alt_code}'")
-
-    # Chiama la funzione API Mexal per l'aggiornamento
-    success = update_article_alt_code(article_code, alt_code)
-
-    if success:
-        # Nota: La cache locale non viene aggiornata qui.
-        return jsonify({'status': 'success', 'message': 'Codice alternativo aggiornato con successo.'})
-    else:
-        print(f"ERRORE API update_alt_code: Fallito aggiornamento per '{article_code}'.")
-        return jsonify({'status': 'error', 'message': 'Errore durante l\'aggiornamento via API Mexal.'}), 500
-
-@app.route('/clienti_indirizzi')
-@login_required
-def clienti_indirizzi():
-    """Pagina temporanea per visualizzare clienti e indirizzi di spedizione."""
-    # Autorizzazione (solo admin)
-    if not current_user.has_role('admin'):
-        flash("Accesso non autorizzato.", "danger")
-        return redirect(url_for('dashboard'))
-
-    # 1. Recupera clienti
-    clients = get_all_clients() # Chiama la funzione API
-    if clients is None: # Controlla se la chiamata API ha fallito
-        flash("Errore nel recupero dell'elenco clienti dall'API.", "danger")
-        clients = [] # Imposta lista vuota per evitare errori nel template
-
-    # 2. Recupera indirizzi
-    all_addresses = get_all_shipping_addresses() # Chiama la funzione API
-    if all_addresses is None: # Controlla se la chiamata API ha fallito
-        flash("Errore nel recupero degli indirizzi di spedizione dall'API.", "warning")
-        all_addresses = [] # Imposta lista vuota
-
-    # 3. Organizza indirizzi per codice cliente
-    addresses_by_client = defaultdict(list) # Usa defaultdict per semplicità
-    for addr in all_addresses:
-        client_code = addr.get('cod_conto') # Recupera il codice cliente dall'indirizzo
-        if client_code: # Assicurati che il codice esista
-            addresses_by_client[client_code].append(addr) # Aggiungi l'indirizzo alla lista del cliente
-
-    # 4. Ordina clienti per ragione sociale (alfabeticamente, ignorando maiuscole/minuscole)
-    clients.sort(key=lambda c: c.get('ragione_sociale', '').lower())
-
-    # 5. Passa i dati recuperati e organizzati al template
-    return render_template('clienti_indirizzi.html',
-                           clients=clients,                 # Lista dei clienti ordinata
-                           addresses_map=addresses_by_client, # Dizionario con indirizzi per cliente
-                           active_page='clienti_indirizzi')
-
-@app.route('/todo')
-@login_required # Accessibile a tutti i loggati
-def todo_list():
-    """Visualizza la lista To-Do CONDIVISA."""
-    # user_id = current_user.id # Non serve più filtrare per utente
-    try:
-        # Recupera TUTTE le task, separate per stato
-        incomplete_tasks = TodoItem.query.filter_by(is_completed=False).order_by(TodoItem.created_at.desc()).all()
-        completed_tasks = TodoItem.query.filter_by(is_completed=True).order_by(TodoItem.completed_at.desc()).all()
-    except Exception as e:
-        print(f"Errore DB leggendo ToDo condivisa: {e}")
-        flash("Errore nel caricamento delle cose da fare.", "danger")
-        incomplete_tasks = []
-        completed_tasks = []
-    
-    assignable_users = sorted(list(users_db.keys()))
-
-    return render_template('todo.html',
-                           incomplete_tasks=incomplete_tasks,
-                           completed_tasks=completed_tasks,
-                           assignable_users=assignable_users,
-                           active_page='todo')
-
-@app.route('/todo/add', methods=['POST'])
-@login_required
-def add_todo():
-    """Aggiunge una nuova task CONDIVISA, assegnandola opzionalmente a un utente."""
-    description = request.form.get('description', '').strip()
-    assigned_user = request.form.get('assign_to') # <-- LEGGI UTENTE ASSEGNATO DAL FORM
-    creator_id = current_user.id
-
-    # Rimuovi valore vuoto se "Nessuno" è selezionato
-    if assigned_user == "":
-        assigned_user = None
-
-    if not description:
-        flash("La descrizione non può essere vuota.", "warning")
-    else:
-        try:
-            # Crea task con created_by e assigned_to
-            new_task = TodoItem(created_by=creator_id,
-                                description=description,
-                                assigned_to=assigned_user) # <-- SALVA UTENTE ASSEGNATO
-            db.session.add(new_task)
-            print(f"DEBUG [add_todo]: Tentativo commit task CONDIVISA da {creator_id} per '{assigned_user or 'Nessuno'}': '{description}'")
-            db.session.commit()
-            print(f"DEBUG [add_todo]: Commit Riuscito.")
-            flash(f"Nuova cosa da fare aggiunta{(' e assegnata a ' + assigned_user) if assigned_user else ''}!", "success")
-
-            # --- Invio notifica (OPZIONALE: anche all'utente assegnato?) ---
-            # ... (codice notifica esistente a creator_id) ...
-            try:
-                description_short = (description[:40] + '...') if len(description) > 40 else description
-                # Notifica a chi l'ha creata
-                send_push_notification(creator_id, "Nuova Task Aggiunta", f"Hai aggiunto: '{description_short}'")
-                # Notifica a chi è stata assegnata (se diverso da chi l'ha creata)
-                if assigned_user and assigned_user != creator_id:
-                    print(f"Tentativo invio notifica assegnazione a {assigned_user}")
-                    send_push_notification(assigned_user, "Nuova Task Assegnata", f"Ti è stata assegnata: '{description_short}' da {creator_id}")
-            except Exception as notify_err: print(f"ERRORE [add_todo]: Fallito invio notifica push: {notify_err}")
-            # --- FINE Invio Notifica ---
-
-        except Exception as e:
-            db.session.rollback()
-            print(f"ERRORE CRITICO [add_todo]: Fallito commit DB condiviso da {creator_id}: {e}")
-            flash("Errore durante l'aggiunta della cosa da fare.", "danger")
-
-    return redirect(url_for('todo_list'))
-
-@app.route('/todo/toggle/<int:item_id>', methods=['POST'])
-@login_required
-def toggle_todo(item_id):
-    """Marca una task CONDIVISA come completata o la riapre (solo admin/preparatori)."""
-    # --- AGGIUNTA CONTROLLO RUOLO ---
-    if not (current_user.has_role('admin') or current_user.has_role('preparatore')):
-        flash("Non hai i permessi per modificare lo stato delle task.", "warning")
-        return redirect(url_for('todo_list'))
-    # --- FINE CONTROLLO RUOLO ---
-
-    completer_id = current_user.id # Chi sta facendo l'azione
-    task = None
-    try:
-        # Cerca task per ID, senza filtrare per utente
-        task = TodoItem.query.get(item_id) # Usa get per chiave primaria
-        if task:
-            original_state = task.is_completed
-            if task.is_completed:
-                # Riapri
-                task.is_completed = False
-                task.completed_at = None
-                task.completed_by = None # Rimuovi chi l'aveva completata
-                action_msg = "riaperta"
-                flash_cat = "info"
-            else:
-                # Completa
-                task.is_completed = True
-                task.completed_at = datetime.utcnow()
-                task.completed_by = completer_id # Salva chi l'ha completata
-                action_msg = "completata"
-                flash_cat = "success"
-
-            print(f"DEBUG [toggle_todo]: Tentativo commit toggle task CONDIVISA {item_id} da {completer_id} (da {original_state} a {task.is_completed})")
-            db.session.commit()
-            print(f"DEBUG [toggle_todo]: Commit Riuscito.")
-            flash(f"'{task.description[:30]}...' {action_msg}!", flash_cat)
-        else:
-            flash("Operazione non trovata.", "warning")
-    except Exception as e:
-        db.session.rollback()
-        print(f"ERRORE CRITICO [toggle_todo]: Fallito commit DB condiviso per task {item_id}, user {completer_id}: {e}")
-        flash("Errore durante l'aggiornamento dello stato.", "danger")
-
-    return redirect(url_for('todo_list'))
-
-@app.route('/todo/delete/<int:item_id>', methods=['POST'])
-@login_required
-def delete_todo(item_id):
-    """Elimina una task CONDIVISA (solo admin)."""
-    # --- AGGIUNTA CONTROLLO RUOLO ---
-    if not current_user.has_role('admin'):
-        flash("Non hai i permessi per eliminare le task.", "warning")
-        return redirect(url_for('todo_list'))
-    # --- FINE CONTROLLO RUOLO ---
-
-    deleter_id = current_user.id
-    task = None
-    try:
-        # Cerca task per ID, senza filtrare per utente
-        task = TodoItem.query.get(item_id)
-        if task:
-            description_short = task.description[:30]
-            db.session.delete(task)
-            print(f"DEBUG [delete_todo]: Tentativo commit delete task CONDIVISA {item_id} da {deleter_id}: '{description_short}'")
-            db.session.commit()
-            print(f"DEBUG [delete_todo]: Commit Riuscito.")
-            flash(f"'{description_short}...' eliminata.", "success")
-        else:
-            flash("Operazione non trovata.", "warning")
-    except Exception as e:
-        db.session.rollback()
-        print(f"ERRORE CRITICO [delete_todo]: Fallito commit DB condiviso per task {item_id}, user {deleter_id}: {e}")
-        flash("Errore durante l'eliminazione.", "danger")
-
-    return redirect(url_for('todo_list'))
 
 @app.route('/download-pdf/<path:filename>')
 @login_required
 def download_pdf(filename):
     """
     Gestisce il download di un PDF da Dropbox in modo sicuro.
-    L'utente deve essere loggato come admin.
     """
     if not current_user.has_role('admin'):
         flash("Accesso non autorizzato.", "danger")
@@ -2460,40 +2461,41 @@ def download_pdf(filename):
         flash("Errore: Dropbox non configurato sul server.", "danger")
         return redirect(url_for('amministrazione'))
 
-    # Il percorso su Dropbox inizia sempre con /
     dropbox_path = f"/{filename}"
     print(f"DEBUG [download_pdf]: Tentativo download '{dropbox_path}' da Dropbox...")
 
     try:
         dbx = dropbox.Dropbox(DROPBOX_TOKEN)
-        
-        # Scarica il file da Dropbox
-        # files_download restituisce i metadati e la risposta HTTP
         metadata, res = dbx.files_download(path=dropbox_path)
         
-        # Invia il file (res.content) al browser come allegato
-        return Response(
-            res.content,
-            mimetype='application/pdf',
-            headers={
-                # Questo forza il browser a scaricarlo col nome corretto
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Length": str(metadata.size)
-            }
-        )
+        # Crea la risposta
+        response = make_response(res.content)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Length'] = str(metadata.size)
+        
+        # Se è una richiesta JavaScript, mostralo inline.
+        # Altrimenti, scaricalo come allegato.
+        if request.args.get('for_js'):
+            response.headers['Content-Disposition'] = f"inline; filename={filename}"
+        else:
+            response.headers['Content-Disposition'] = f"attachment; filename={filename}"
+        
+        # Permetti al JavaScript su localhost di chiamare questa rotta
+        response.headers['Access-Control-Allow-Origin'] = '*'
+
+        return response
+        
     except dropbox.exceptions.ApiError as e:
-        # Errore comune: il file non c'è
         print(f"ERRORE [download_pdf]: File non trovato su Dropbox '{dropbox_path}': {e}")
         flash(f"Errore: File {filename} non trovato su Dropbox.", "danger")
         return redirect(url_for('amministrazione'))
     except Exception as e:
-        # Altro errore
         print(f"ERRORE [download_pdf]: Errore generico: {e}")
         flash("Errore sconosciuto durante il download del file.", "danger")
         return redirect(url_for('amministrazione'))
 
 
-# --- NUOVA POSIZIONE: Creazione DB all'avvio, prima di app.run ---
+# --- Creazione DB all'avvio ---
 with app.app_context():
     try:
         print("Verifica/Creazione tabelle database all'avvio...")
@@ -2501,34 +2503,18 @@ with app.app_context():
         print("Verifica/Creazione tabelle completata.")
     except Exception as e:
         print(f"ERRORE CRITICO durante creazione tabelle DB all'avvio: {e}")
-        # Considera di uscire dall'app se il DB è essenziale e non può essere creato
-        # import sys
-        # sys.exit(1)
 
 
 # --- Avvio App ---
 if __name__ == '__main__':
-    # Stampa configurazione per debug
     print("--- Configurazione Avvio ---")
-    print(f"SECRET_KEY: {'Configurata (da env o default)' if app.config['SECRET_KEY'] else 'NON CONFIGURATA!'}")
+    print(f"SECRET_KEY: {'Configurata' if app.config['SECRET_KEY'] else 'NON CONFIGURATA!'}")
     print(f"SQLALCHEMY_DATABASE_URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
-    print(f"VAPID_PUBLIC_KEY: {'Configurata' if VAPID_PUBLIC_KEY else 'NON CONFIGURATA!'}")
-    print(f"VAPID_PRIVATE_KEY: {'Configurata' if VAPID_PRIVATE_KEY else 'NON CONFIGURATA!'}")
-    print(f"VAPID_CLAIM_EMAIL: {VAPID_CLAIM_EMAIL}")
-    print(f"MX_API_BASE_URL (da env): {os.getenv('MX_API_BASE_URL')}") # Logga valore env
-    print(f"MX_AUTH (da env): {'Configurato' if os.getenv('MX_AUTH') else 'NON CONFIGURATO!'}")
-    print(f"GOOGLE_MAPS_API_KEY (da env): {'Configurata' if os.getenv('GOOGLE_MAPS_API_KEY') else 'NON CONFIGURATA!'}")
-    print(f"GMAPS_ORIGIN (da env): {os.getenv('GMAPS_ORIGIN')}")
-    print(f"DEFAULT_STOP_TIME_MIN (da env): {os.getenv('DEFAULT_STOP_TIME_MIN')}")
+    # ... (altri print di configurazione) ...
     print("--------------------------")
-
-    if not os.getenv('MX_AUTH'):
-        print("\nATTENZIONE: MX_AUTH non è configurato nelle variabili d'ambiente!\n")
-    # Aggiungi altri controlli per chiavi essenziali (VAPID, Google Maps, Secret Key)
-
-    # Usa host='0.0.0.0' per essere accessibile sulla rete locale
-    # Usa debug=True SOLO per sviluppo, MAI in produzione
-    # Considera l'uso di un server WSGI (Gunicorn, Waitress) per produzione
+    
+    # Per produzione su Render, gunicorn sarà il punto d'ingresso.
+    # Questo app.run() è solo per il test locale.
     app.run(host='0.0.0.0', port=5001, debug=True)
 
 

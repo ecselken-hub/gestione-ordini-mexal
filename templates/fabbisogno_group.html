@@ -1,0 +1,18 @@
+<div class="card fabb-group-card">
+    <ul class="fabb-list">
+        {% for codice, dettagli in articoli.items() %}
+        <li class="fabb-item">
+            <div class="fabb-item-info">
+                <span class="fabb-item-desc">{{ dettagli.descrizione }}</span>
+                <span class="fabb-item-code">Cod: {{ codice }}</span>
+                
+                </div>
+            
+            <div class="fabb-item-total">
+                <span style="font-size: 1.1em;">{{ dettagli.totale_colli | round | int }}</span>
+                <span style="font-size: 0.7em; color: var(--secondary-text-color);"> x {{ dettagli.qta_per_collo | round(2) }}</span>
+            </div>
+            </li>
+        {% endfor %}
+    </ul>
+</div>
