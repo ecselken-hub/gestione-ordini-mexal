@@ -44,7 +44,8 @@
         }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
+            overscroll-behavior-y: none; /* Previene il "pull to refresh" accidentale */
+            background-color: #eef2f5;
             color: var(--primary-text-color);
             margin: 0;
             padding: 20px 15px 100px 15px;
@@ -149,6 +150,41 @@
             height: 1rem;
             border-width: .2em;
         }
+
+    .font-mono {
+        font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+        letter-spacing: -0.5px;
+    }
+
+    /* Nascondi scrollbar ma permetti scroll */
+    ::-webkit-scrollbar {
+        width: 0px;
+        background: transparent;
+    }
+
+    /* Bottom Navigation più spessa per dita grosse/guanti */
+    .tab-bar {
+        height: 65px;
+        padding-bottom: 10px;
+        background-color: #ffffff;
+        border-top: 2px solid #007aff; /* Indicatore visivo forte */
+    }
+    
+    .tab-item .icon {
+        font-size: 1.6rem;
+        margin-top: 5px;
+    }
+
+    /* Pulsanti "Action" galleggianti o fissi in basso */
+    .sticky-bottom-actions {
+        position: fixed;
+        bottom: 70px; /* Sopra la tab bar */
+        left: 0; 
+        right: 0;
+        padding: 10px;
+        background: linear-gradient(to top, #eef2f5 80%, transparent);
+        z-index: 900;
+    }
 
     </style>
     {% block head_extra %}{% endblock %}

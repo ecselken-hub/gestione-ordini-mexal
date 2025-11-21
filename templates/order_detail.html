@@ -1,946 +1,583 @@
 {% extends "base.html" %}
 
-{% block title %}Picking Ordine {{ order.numero }}{% endblock %}
+{% block title %}Picking #{{ order.numero }}{% endblock %}
 
 {% block content %}
-<div class="header">
-    <div>
-        <h1 style="font-size: 2rem; margin: 0;">Ordine #{{ order.numero }}</h1>
-        <p style="color: var(--secondary-text-color); margin: 0; font-weight: 500;">{{ order.ragione_sociale }}</p>
-    </div>
-    <a href="{{ url_for('ordini_list') }}" class="btn btn-secondary">Lista Ordini</a>
-</div>
+<input type="text" id="barcode-scanner" autocomplete="off" 
+       style="position:fixed; top:-1000px; left:0; opacity:0; z-index:-1;" autofocus>
 
-{# Card Dati Cliente (Usa campi effettivi) #}
-<div class="card mb-3">
-    <div class="card-header">Dati Cliente</div>
-    <div class="card-body">
-        <p><strong>Indirizzo:</strong> {{ order.indirizzo_effettivo or 'N/D' }}</p>
-        <p><strong>Località:</strong> {{ order.localita_effettiva or 'N/D' }}</p>
-        {% if order.telefono_effettivo %}<p><strong>Telefono:</strong> {{ order.telefono_effettivo }}</p>{% endif %}
-        {% if order.nota %}<p><strong>Note Ordine:</strong> {{ order.nota }}</p>{% endif %}
-        {% if order.pagamento_desc %}<p><strong>Pagamento:</strong> {{ order.pagamento_desc }}</p>{% endif %}
-    </div>
-</div>
-
-{# Card Stato Picking #}
-<div class="card mb-3">
-    <div class="card-header">Stato Picking</div>
-    <div class="card-body">
-        <p style="margin: 0;">
-            <span style="color: var(--secondary-text-color); font-weight: 500;">Stato Attuale:</span>
-            <span class="badge status-badge 
-                {% if state.status == 'In Picking' %} status-picking
-                {% elif state.status == 'In Controllo' %} status-controllo
-                {% elif state.status == 'Completato' %} status-completato
-                {% else %} status-default {% endif %}">
-                {{ state.status }}
+<div class="pda-header sticky-top bg-white shadow-sm" style="margin: -20px -15px 15px -15px; padding: 15px;">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div>
+            <span class="badge bg-secondary font-mono" style="font-size: 0.9rem;">#{{ order.numero }}</span>
+            <span class="fw-bold ms-2 text-truncate" style="max-width: 180px; display:inline-block; vertical-align:middle;">
+                {{ order.ragione_sociale }}
             </span>
-        </p>
+        </div>
+        <div id="connection-status" class="text-success" style="font-size: 0.8rem;">● Online</div>
+    </div>
+
+    {% set items_total = order.righe | length %}
+    {% set items_done = state.picked_items | length %} 
+    <div class="progress" style="height: 25px; background-color: #e9ecef; border-radius: 12px;">
+        <div id="picking-progress-bar" class="progress-bar bg-primary progress-bar-striped progress-bar-animated" 
+             role="progressbar" style="width: 0%; font-weight:bold;">0%</div>
+    </div>
+    
+    <div class="mt-2 d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center" onclick="document.getElementById('add-collo-btn').click()">
+            <span class="text-muted small me-2">COLLO ATTIVO:</span>
+            <span id="active-collo-display" class="badge bg-primary p-2" style="font-size: 1.1rem;">-</span>
+        </div>
+        <div>
+            <button class="btn btn-sm btn-outline-primary fw-bold" id="add-collo-btn" style="border-width: 2px;">
+                + NUOVO
+            </button>
+        </div>
     </div>
 </div>
 
-{# --- INTERFACCIA PICKING PER COLLI --- #}
-<div class="card">
-    <div class="card-header">Gestione Picking</div>
+<div id="scan-message" class="alert alert-info py-2 text-center fw-bold mb-2 shadow-sm" style="display:none;"></div>
 
-    {# Pannello Azioni (Solo 'In Picking') #}
-    {% if state.status == 'In Picking' %}
-    <div class="card-body bg-light border-bottom">
-        <div class="row g-2 align-items-end">
-            {# Bottone Nuovo Collo #}
-            <div class="col-12 col-sm-4">
-                <button class="btn btn-outline-primary w-100" id="add-collo-btn">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
-                        class="bi bi-plus-square" viewBox="0 0 16 16">
-                        <path
-                            d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1h12zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2z" />
-                        <path
-                            d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z" />
-                    </svg>
-                    Aggiungi Collo
-                </button>
-            </div>
-            {# Info Collo Attivo #}
-            <div class="col-12 col-sm-8">
-                <label for="barcode-scanner" class="form-label fw-bold">Collo Attivo: <span id="active-collo-display"
-                        class="badge bg-primary">Nessuno</span></label>
-                <input type="text" id="barcode-scanner" class="form-control" placeholder="Scansiona in collo attivo..."
-                    autofocus>
-                <div id="scan-message" class="mt-2" style="min-height: 20px; font-weight: 500;"></div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    {# Due sezioni: Rimanenti e Packing List #}
-    <div class="card-body p-0">
-        <ul class="nav nav-tabs nav-fill" id="picking-tabs" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link active" id="tab-rimanenti" data-bs-toggle="tab"
-                    data-bs-target="#content-rimanenti" type="button" role="tab" aria-controls="content-rimanenti"
-                    aria-selected="true">
-                    Rimanenti
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="tab-packing-list" data-bs-toggle="tab"
-                    data-bs-target="#content-packing-list" type="button" role="tab" aria-controls="content-packing-list"
-                    aria-selected="false">
-                    Packing List (Colli)
-                </button>
-            </li>
-        </ul>
-
-        <div class="tab-content" id="picking-tabs-content">
-            {# --- Tab 1: Articoli Rimanenti --- #}
-            <div class="tab-pane fade show active" id="content-rimanenti" role="tabpanel"
-                aria-labelledby="tab-rimanenti">
-                <div class="article-list-container" id="remaining-items-list">
-                    {# Generato da JavaScript #}
-                    {% if not order.righe %}
-                    <p class="text-center text-muted p-3">Nessun articolo in questo ordine.</p>
-                    {% endif %}
-                </div>
-            </div>
-
-            {# --- Tab 2: Packing List (Cosa c'è nei colli) --- #}
-            <div class="tab-pane fade" id="content-packing-list" role="tabpanel" aria-labelledby="tab-packing-list">
-                <div class="packing-list-container" id="packing-list-summary">
-                    {# Generato da JavaScript #}
-                    {% if not state.packing_list %}
-                    <p class="text-center text-muted p-3">Nessun collo ancora creato.</p>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
+<div id="picking-workspace" style="padding-bottom: 140px;"> <div class="d-flex mb-3 gap-2">
+        <button class="btn btn-sm btn-dark flex-fill active" onclick="filterView('todo')">Da Fare</button>
+        <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="filterView('done')">Fatti</button>
+        <button class="btn btn-sm btn-outline-secondary flex-fill" onclick="filterView('colli')">Colli</button>
     </div>
 
-    {# Form per Azioni Stato #}
-    <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}"
-        method="POST" id="state-change-form">
-        <div class="card-footer bg-light p-3 action-footer-simple">
-            {% if state.status == 'Da Lavorare' %}
-            <button type="submit" name="action" value="start_picking" class="btn btn-primary btn-lg w-100">Avvia
-                Picking</button>
-
-            {% elif state.status == 'In Picking' %}
-            <div class="mb-3">
-                <label for="colli_totali_operatore" class="form-label fw-bold">TOTALE COLLI (Verifica):</label>
-                <input type="number" class="form-control text-center"
-                    style="max-width: 100px; display: inline-block; margin-left: 10px;" id="colli_totali_operatore"
-                    name="colli_totali_operatore" value="{{ state.packing_list | length }}" min="0" required>
-            </div>
-            <button type="submit" name="action" value="complete_picking" class="btn btn-success btn-lg w-100"
-                style="background-color: #34A853; border-color: #34A853;">Completa Picking e Invia a Controllo</button>
-
-            {% elif state.status == 'In Controllo' %}
-            <p class="fs-5 mb-3"><strong>Totale Colli Dichiarati: {{ state.colli_totali_operatore or 'N/D' }}</strong>
-            </p>
-            <p class="fs-6 text-muted">(Colli Effettivi in Packing List: {{ state.packing_list | length }})</p>
-            <div class="d-flex gap-2 justify-content-center">
-                <button type="submit" name="action" value="approve_order" class="btn btn-success btn-lg">Approva
-                    Ordine</button>
-                <button type="submit" name="action" value="reject_order" class="btn btn-danger btn-lg">Rimanda al
-                    Picking</button>
-            </div>
-
-            {% elif state.status == 'Completato' %}
-            <div class="alert alert-success d-flex align-items-center mb-0" role="alert">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor"
-                    class="bi bi-check-circle-fill flex-shrink-0 me-2" viewBox="0 0 16 16">
-                    <path
-                        d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" />
-                </svg>
-                <div>Ordine Completato</div>
-            </div>
-            {% endif %}
+    <div id="remaining-items-list" class="list-group list-group-flush">
         </div>
+
+    <div id="packing-list-summary" class="d-none">
+        </div>
+
+</div>
+
+<div class="fixed-bottom bg-white border-top p-3 shadow-lg" style="bottom: 60px; z-index: 1000;">
+    <form action="{{ url_for('order_action', sigla=order.sigla, serie=order.serie, numero=order.numero) }}" method="POST">
+        {% if state.status == 'Da Lavorare' %}
+            <button type="submit" name="action" value="start_picking" class="btn btn-primary w-100 btn-lg fw-bold py-3">
+                AVVIA PICKING ▶
+            </button>
+        {% elif state.status == 'In Picking' %}
+            <input type="hidden" id="colli_totali_operatore" name="colli_totali_operatore" value="0">
+            <button type="submit" name="action" value="complete_picking" class="btn btn-success w-100 btn-lg fw-bold py-3">
+                COMPLETA (INVIO) ✓
+            </button>
+        {% elif state.status == 'In Controllo' %}
+            <div class="row g-2">
+                <div class="col-6">
+                    <button type="submit" name="action" value="reject_order" class="btn btn-outline-danger w-100 py-3 fw-bold">RIAPRI</button>
+                </div>
+                <div class="col-6">
+                    <button type="submit" name="action" value="approve_order" class="btn btn-success w-100 py-3 fw-bold">APPROVA</button>
+                </div>
+            </div>
+        {% else %}
+             <div class="alert alert-success text-center m-0 fw-bold">ORDINE CHIUSO</div>
+        {% endif %}
     </form>
 </div>
 
-{# --- CSS --- #}
 <style>
-    /* Stili base (incollati da base.html per sicurezza) */
-    .header {
-        display: flex;
-        justify-content: space-between;
+    /* Card Articolo "Da Fare" - Stile aggressivo e chiaro */
+    .pda-item-card {
+        border-left: 6px solid #dc3545; /* Rosso default */
+        background: white;
+        margin-bottom: 10px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        padding: 12px;
+        transition: transform 0.1s;
+    }
+    
+    .pda-item-card.completed {
+        border-left-color: #198754; /* Verde */
+        background-color: #f8fff9;
+        opacity: 0.7;
+    }
+
+    .pda-item-card:active {
+        transform: scale(0.98);
+        background-color: #f0f0f0;
+    }
+
+    /* Testi giganti per codici e qta */
+    .big-code { font-size: 1.1rem; font-weight: 700; color: #333; }
+    .big-qty { font-size: 1.8rem; font-weight: 800; }
+    
+    /* Griglia interna alla card */
+    .item-grid {
+        display: grid;
+        grid-template-columns: 1fr auto; 
+        gap: 10px;
         align-items: center;
-        margin-bottom: 1.5rem;
-        padding-bottom: 1rem;
-        border-bottom: 1px solid #dee2e6;
     }
 
-    .header h1 {
-        font-size: 1.8rem;
-    }
-
-    .card {
-        border: 1px solid #e0e0e0;
-        border-radius: 0.75rem;
-        margin-bottom: 1rem;
-        background-color: #fff;
-    }
-
-    .card-header {
-        background-color: #f8f9fa;
-        font-weight: 600;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid #e0e0e0;
-    }
-
-    .card-body {
-        padding: 1rem;
-    }
-
-    .card-footer {
-        padding: 0.75rem 1rem;
-        background-color: #f8f9fa;
-        border-top: 1px solid #e0e0e0;
-    }
-
-    .badge {
-        display: inline-block;
-        padding: .35em .65em;
-        font-size: .75em;
-        font-weight: 700;
+    /* Stepper Buttons giganti */
+    .stepper-btn {
+        width: 45px;
+        height: 45px;
+        border-radius: 8px;
+        font-size: 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         line-height: 1;
-        color: #fff;
-        text-align: center;
-        white-space: nowrap;
-        vertical-align: baseline;
-        border-radius: .25rem;
-    }
-
-    .status-badge {
-        font-size: 0.9em;
-        padding: 0.4em 0.7em;
-        vertical-align: middle;
-    }
-
-    .status-picking {
-        background-color: #0d6efd;
-        color: white;
-    }
-
-    .status-controllo {
-        background-color: #ffc107;
-        color: #333;
-    }
-
-    .status-completato {
-        background-color: #198754;
-        color: white;
-    }
-
-    .status-default {
-        background-color: #6c757d;
-        color: white;
-    }
-
-    .bg-primary {
-        background-color: #0d6efd !important;
-    }
-
-    .bg-secondary {
-        background-color: #6c757d !important;
-    }
-
-    .bg-success {
-        background-color: #198754 !important;
-    }
-
-    .bg-danger {
-        background-color: #dc3545 !important;
-    }
-
-    .bg-warning {
-        background-color: #ffc107 !important;
-    }
-
-    .bg-light {
-        background-color: #f8f9fa !important;
-    }
-
-    .text-dark {
-        color: #212529 !important;
-    }
-
-    .text-success {
-        color: #198754 !important;
-    }
-
-    .text-danger {
-        color: #dc3545 !important;
-    }
-
-    .text-muted {
-        color: #6c757d !important;
-    }
-
-    /* Lista Articoli (Tab 1: Rimanenti) */
-    .article-list-container {
-        padding: 0;
-    }
-
-    .article-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.75rem 1rem;
-        border-bottom: 1px solid #eee;
-    }
-
-    .article-list-container .article-row:last-child {
-        border-bottom: none;
-    }
-
-    .article-info {
-        flex-grow: 1;
-        padding-right: 1rem;
-    }
-
-    .article-description {
-        font-weight: 500;
-        margin: 0 0 2px 0;
-        font-size: 0.95em;
-    }
-
-    .article-code-simple {
-        font-size: 0.8em;
-        color: var(--secondary-text-color);
-        margin: 0;
-    }
-
-    .article-info small {
-        font-size: 0.75em;
-    }
-
-    .remaining-quantity {
-        text-align: right;
-        min-width: 80px;
-    }
-
-    .remaining-qty-badge {
-        font-size: 1rem;
-        font-weight: 600;
-        padding: 0.4em 0.7em;
-        min-width: 60px;
-        display: inline-block;
-    }
-
-    .remaining-unit-label {
-        font-size: 0.8em;
-        color: var(--secondary-text-color);
-        margin-left: 3px;
-    }
-
-    .picked-complete-simple {
-        background-color: #e6ffed !important;
-        opacity: 0.6;
-    }
-
-    .picked-complete-simple .article-description {
-        text-decoration: line-through;
-    }
-
-    /* Feedback Scanner */
-    #scan-message {
-        padding: 0.75rem 1.25rem;
-        border: 1px solid transparent;
-        border-radius: 0.25rem;
-        margin-top: 0.75rem;
-        text-align: center;
-        font-weight: 500;
-    }
-
-    #scan-message:empty {
-        display: none;
-    }
-
-    #scan-message.text-success {
-        color: #0f5132;
-        background-color: #d1e7dd;
-        border-color: #badbcc;
-    }
-
-    #scan-message.text-danger {
-        color: #842029;
-        background-color: #f8d7da;
-        border-color: #f5c2c7;
-    }
-
-    #scan-message.text-warning {
-        color: #664d03;
-        background-color: #fff3cd;
-        border-color: #ffecb5;
-    }
-
-    #scan-message.text-info {
-        color: #055160;
-        background-color: #cff4fc;
-        border-color: #b6effb;
-    }
-
-    /* Footer Azioni */
-    .action-footer-simple {
-        padding: 1rem;
-        background-color: #f8f9fa;
-        border-top: 1px solid #e0e0e0;
-        text-align: center;
-    }
-
-    .action-footer-simple .form-label {
-        font-weight: 500;
-    }
-
-    /* Stili Packing List (Tab 2) */
-    .packing-list-container {
-        padding: 0;
-    }
-
-    .collo-header {
-        padding: 0.75rem 1rem;
-        background-color: #f8f9fa;
-        border-bottom: 1px solid #dee2e6;
-        font-weight: 600;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .collo-header.active {
-        /* Collo attivo */
-        background-color: #dbeafe;
-        border-left: 5px solid var(--accent-color);
-        padding-left: 0.75rem;
-    }
-
-    .collo-item-list {
-        padding: 0;
-        margin: 0;
-    }
-
-    .collo-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.5rem 1rem 0.5rem 1.5rem;
-        /* Indentato */
-        border-bottom: 1px solid #f0f0f0;
-        font-size: 0.9em;
-    }
-
-    .collo-item:last-child {
-        border-bottom: none;
-    }
-
-    .collo-item-details {
-        flex-grow: 1;
-        padding-right: 1rem;
-    }
-
-    .collo-item-desc {
-        font-weight: 500;
-    }
-
-    .collo-item-code {
-        font-size: 0.9em;
-        color: var(--secondary-text-color);
-    }
-
-    /* --- STILE STEPPER (+/-) --- */
-    .collo-item-stepper {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .collo-item-qty {
-        font-weight: 700;
-        font-size: 1.1em;
-        min-width: 20px;
-        text-align: center;
-    }
-
-    .collo-item-adjust-btn {
-        padding: 0.1rem 0.4rem;
-        line-height: 1;
-        border-radius: 50%;
-        /* Bottoni tondi */
-        width: 28px;
-        height: 28px;
-        font-size: 0.8rem;
-        border-width: 1px;
-    }
-
-    /* Stile per Quantità in stato non-picking */
-    .collo-item-qty-static {
-        font-weight: 700;
-        font-size: 1.1em;
-        padding: 0 0.5rem;
-        color: var(--primary-text-color);
-    }
-
-    /* --- FINE STILE STEPPER --- */
-
-    /* Stili Tab */
-    .nav-tabs {
-        border-bottom: 1px solid #dee2e6;
-    }
-
-    .nav-link {
-        border: 1px solid transparent;
-        border-top-left-radius: .25rem;
-        border-top-right-radius: .25rem;
-        color: var(--accent-color);
-        cursor: pointer;
-    }
-
-    .nav-link.active {
-        color: #495057;
-        background-color: #fff;
-        border-color: #dee2e6 #dee2e6 #fff;
+        touch-action: manipulation; /* Migliora risposta al tocco */
     }
 </style>
 
-{# --- JAVASCRIPT CON STEPPER --- #}
+{% endblock %}
+
 {% block scripts_extra %}
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        if (window.pickingPageInitialized) {
-            console.warn("Script di picking già inizializzato. Blocco la seconda esecuzione.");
-            return;
-        }
-        window.pickingPageInitialized = true;
-        // Riferimenti Globali
-        const scannerInput = document.getElementById('barcode-scanner');
-        const scanMessageDiv = document.getElementById('scan-message');
-        const addColloBtn = document.getElementById('add-collo-btn');
-        const activeColloDisplay = document.getElementById('active-collo-display');
-        const remainingListDiv = document.getElementById('remaining-items-list');
-        const packingListDiv = document.getElementById('packing-list-summary');
-        const colliTotaliInput = document.getElementById('colli_totali_operatore');
+document.addEventListener('DOMContentLoaded', function () {
+    // --- 1. CONFIGURAZIONE VARIABILI ---
+    const scannerInput = document.getElementById('barcode-scanner');
+    const scanMessageDiv = document.getElementById('scan-message');
+    const activeColloDisplay = document.getElementById('active-collo-display');
+    const remainingListDiv = document.getElementById('remaining-items-list');
+    const packingListDiv = document.getElementById('packing-list-summary');
+    const progressBar = document.getElementById('picking-progress-bar');
+    const colliTotaliInput = document.getElementById('colli_totali_operatore');
 
-        // URL API
-        const scanApiUrlBase = `/api/scan-barcode/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}`;
-        const createColloApiUrl = `/api/order/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}/collo/create`;
-        const removeItemApiUrlBase = `/api/order/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}/collo`; // ... /{collo_id}/item/remove
-
-        // Dati di Stato JS (letti dal server all'avvio)
-        let state = {
-            packing_list: {{ state.packing_list | tojson | safe
-    }},
-        picked_items: {{ state.picked_items | tojson | safe }}
+    // Dati Stato
+    let state = {
+        packing_list: {{ state.packing_list | tojson | safe }},
+        picked_items: {{ state.picked_items | tojson | safe }},
+        status: "{{ state.status }}"
     };
     const orderRows = {{ order.righe | tojson | safe }};
-    const orderStatus = "{{ state.status }}";
-
-    // Trova l'ID collo attivo più recente
     let activeColloId = state.packing_list.length > 0 ? state.packing_list[state.packing_list.length - 1].collo_id : null;
+    
+    // API Endpoints
+    const apiBase = `/api/order/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}`;
+    const scanApiUrl = `/api/scan-barcode/{{ order.sigla }}/{{ order.serie }}/{{ order.numero }}`;
 
-    // Inizializza UI al caricamento
-    updateRemainingItemsUI();
-    updatePackingListUI();
-    updateActiveColloUI();
-
-    // --- GESTIONE AUDIO ---
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    function playBeep(type = 'success') {
-        try {
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            gainNode.gain.value = 0.1;
-            if (type === 'success') {
-                oscillator.frequency.value = 880; oscillator.type = 'sine';
-            } else {
-                oscillator.frequency.value = 300; oscillator.type = 'square';
+    // --- 2. FOCUS TRAP PER SCANNER ---
+    // Questo è il segreto dei PDA: il focus deve tornare sempre all'input nascosto
+    if(state.status === 'In Picking') {
+        setInterval(() => {
+            // Non rubare il focus se l'utente sta scrivendo in un altro input visibile (es. note)
+            if (document.activeElement.tagName !== 'INPUT' || document.activeElement.id === 'barcode-scanner') {
+                scannerInput.focus();
             }
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.15);
-        } catch (e) { console.error("Audio beep fallito:", e); }
-    }
-
-    // --- GESTIONE SCANNER ---
-    if (scannerInput) {
-        scannerInput.focus();
-        scannerInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter' || e.keyCode === 13) {
-                e.preventDefault();
-                const barcode = scannerInput.value.trim();
-                if (barcode === '') return;
-                // Lo scanner chiama la funzione 'add' (passando il barcode)
-                handleItemAdjustment(activeColloId, null, 'add', barcode);
+        }, 500); // Check ogni mezzo secondo
+        
+        // Blur preventivo
+        document.addEventListener('click', (e) => {
+            if (e.target.tagName !== 'BUTTON' && e.target.tagName !== 'A' && e.target.tagName !== 'INPUT') {
+                scannerInput.focus();
             }
         });
     }
 
-    // --- GESTIONE BOTTONE "AGGIUNGI COLLO" ---
-    if (addColloBtn) {
-        addColloBtn.addEventListener('click', async () => {
-            showScanFeedback('Creazione nuovo collo...', 'info');
-            try {
-                const response = await fetch(createColloApiUrl, { method: 'POST' });
-                const data = await response.json();
-                if (!response.ok || data.status !== 'success') {
-                    throw new Error(data.message || 'Errore creazione collo');
-                }
+    // --- 3. RENDERING UI "PDA STYLE" ---
+    
+    function render() {
+        renderHeader();
+        renderList();
+        renderPackingList(); // Renderizza in background
+    }
 
+    function renderHeader() {
+        if(state.status === 'In Picking') {
+            activeColloDisplay.textContent = activeColloId ? activeColloId : "SELEZIONA";
+            activeColloDisplay.className = activeColloId ? "badge bg-primary p-2" : "badge bg-danger p-2 animate__animated animate__flash";
+            if(colliTotaliInput) colliTotaliInput.value = state.packing_list.length;
+        } else {
+             activeColloDisplay.textContent = "-";
+             activeColloDisplay.className = "badge bg-secondary p-2";
+        }
+
+        // Calcolo Progresso Reale
+        let totalPieces = 0;
+        let pickedPieces = 0;
+        
+        orderRows.forEach(row => {
+            let nr = parseFloat(row.nr_colli || 0);
+            let qta = parseFloat(row.quantita || 0);
+            let target = nr > 0 ? (nr * qta) : qta;
+            if(target === 0) target = 1; // Evita div by zero
+            
+            totalPieces += target;
+            pickedPieces += (state.picked_items[String(row.id_riga)] || 0);
+        });
+
+        let percent = totalPieces > 0 ? Math.round((pickedPieces / totalPieces) * 100) : 0;
+        if(percent > 100) percent = 100; // Cap at 100 visivo
+        
+        progressBar.style.width = `${percent}%`;
+        progressBar.textContent = `${percent}%`;
+        
+        if(percent === 100) {
+            progressBar.classList.remove('bg-primary');
+            progressBar.classList.add('bg-success');
+        }
+    }
+
+    function renderList() {
+        remainingListDiv.innerHTML = '';
+        
+        // Ordina: Incompleti prima, poi completati
+        const sortedRows = [...orderRows].sort((a, b) => {
+            const idA = String(a.id_riga);
+            const idB = String(b.id_riga);
+            const pickedA = state.picked_items[idA] || 0;
+            const pickedB = state.picked_items[idB] || 0;
+            
+            // Logica target
+            let tA = parseFloat(a.nr_colli || 0) * parseFloat(a.quantita || 0);
+            if(tA === 0) tA = parseFloat(a.quantita || 0);
+            let tB = parseFloat(b.nr_colli || 0) * parseFloat(b.quantita || 0);
+            if(tB === 0) tB = parseFloat(b.quantita || 0);
+
+            const completeA = pickedA >= tA;
+            const completeB = pickedB >= tB;
+
+            if (completeA === completeB) return 0;
+            return completeA ? 1 : -1; // Incompleti in alto
+        });
+
+        if (sortedRows.length === 0) {
+            remainingListDiv.innerHTML = '<div class="text-center p-4 text-muted">Nessuna riga ordine.</div>';
+            return;
+        }
+
+        sortedRows.forEach(row => {
+            const rowId = String(row.id_riga);
+            const picked = state.picked_items[rowId] || 0;
+            
+            let nr = parseFloat(row.nr_colli || 0);
+            let qta = parseFloat(row.quantita || 0);
+            let target = nr > 0 ? (nr * qta) : qta;
+            target = Math.round(target);
+
+            const isComplete = picked >= target;
+            
+            // HTML CARD OTTIMIZZATA
+            const cardHtml = `
+            <div class="pda-item-card ${isComplete ? 'completed' : ''}" id="row-${rowId}">
+                <div class="item-grid">
+                    <div>
+                        <div class="font-mono text-muted small">${row.codice_articolo}</div>
+                        <div class="fw-bold text-dark" style="line-height:1.2;">${row.descr_articolo}</div>
+                        ${row.cod_alternativo && row.cod_alternativo !== 'N/D' ? `<div class="badge bg-light text-dark border mt-1 font-mono">EAN: ${row.cod_alternativo}</div>` : ''}
+                    </div>
+                    <div class="text-end">
+                        <div class="d-flex align-items-center justify-content-end gap-2">
+                             <span class="big-qty ${isComplete ? 'text-success' : 'text-danger'}">${picked}</span>
+                             <span class="text-muted" style="font-size:1.2rem;">/</span>
+                             <span class="big-qty text-dark">${target}</span>
+                        </div>
+                        <small class="text-muted font-mono">PZ</small>
+                    </div>
+                </div>
+
+                ${state.status === 'In Picking' ? `
+                <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+                    <button class="btn btn-outline-danger stepper-btn" 
+                            onclick="manualAdjust('${row.codice_articolo}', 'remove')">
+                        −
+                    </button>
+                    
+                    <span class="small text-muted text-uppercase fw-bold">Manuale</span>
+
+                    <button class="btn btn-outline-success stepper-btn" 
+                            onclick="manualAdjust('${row.codice_articolo}', 'add')">
+                        +
+                    </button>
+                </div>
+                ` : ''}
+            </div>
+            `;
+            remainingListDiv.insertAdjacentHTML('beforeend', cardHtml);
+        });
+    }
+
+    function renderPackingList() {
+        // Implementazione semplificata per la vista "Colli"
+        let html = '';
+        state.packing_list.forEach(collo => {
+             const isActive = collo.collo_id === activeColloId;
+             html += `<div class="card mb-2 ${isActive ? 'border-primary' : ''}">
+                <div class="card-header d-flex justify-content-between">
+                    <strong>Collo ${collo.collo_id}</strong>
+                    ${state.status === 'In Picking' && !isActive ? `<button class="btn btn-sm btn-primary" onclick="setActiveCollo(${collo.collo_id})">Attiva</button>` : ''}
+                </div>
+                <div class="card-body p-2">
+                    <ul class="mb-0 ps-3">`;
+             for(let [code, qta] of Object.entries(collo.items || {})) {
+                 html += `<li><span class="font-mono fw-bold">${code}</span>: ${qta}</li>`;
+             }
+             html += `</ul></div></div>`;
+        });
+        packingListDiv.innerHTML = html || '<div class="p-3 text-center">Nessun collo</div>';
+    }
+
+    // --- 4. LOGICA INTERAZIONE ---
+
+    // Gestione Scanner
+    scannerInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            const barcode = scannerInput.value.trim();
+            scannerInput.value = ''; // Pulisci subito
+            if(barcode) handleScan(barcode);
+        }
+    });
+
+    async function handleScan(barcode) {
+        if(!activeColloId) {
+            feedback("Seleziona o crea un collo prima!", "danger", true);
+            return;
+        }
+
+        feedback(`Scansione: ${barcode}...`, "info");
+        try {
+            const res = await fetch(`${scanApiUrl}/collo/${activeColloId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({barcode: barcode})
+            });
+            const data = await res.json();
+            processApiResponse(data);
+        } catch(e) {
+            feedback("Errore di rete", "danger", true);
+        }
+    }
+
+    // Gestione Manuale (+/-)
+    window.manualAdjust = async function(code, action) {
+        if(!activeColloId) {
+            feedback("Nessun collo attivo!", "danger", true);
+            return;
+        }
+        
+        // Vibrazione feedback tattile immediato
+        if(navigator.vibrate) navigator.vibrate(50);
+
+        const url = `${apiBase}/collo/${activeColloId}/item/${action}`;
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({article_code: code})
+            });
+            const data = await res.json();
+            processApiResponse(data);
+        } catch(e) {
+            feedback("Errore API", "danger", true);
+        }
+    };
+
+    window.setActiveCollo = function(id) {
+        activeColloId = id;
+        render();
+        filterView('todo'); // Torna alla lista
+    };
+
+    // Creazione Collo
+    document.getElementById('add-collo-btn')?.addEventListener('click', async () => {
+        try {
+            const res = await fetch(`${apiBase}/collo/create`, {method: 'POST'});
+            const data = await res.json();
+            if(data.status === 'success') {
                 state.packing_list = data.packing_list;
                 activeColloId = data.new_collo_id;
-
-                updatePackingListUI();
-                updateActiveColloUI();
-                showScanFeedback(`Creato Collo ${activeColloId}. Ora è attivo.`, 'success');
-                if (scannerInput) scannerInput.focus();
-
-            } catch (err) {
-                console.error('Errore Creazione Collo:', err);
-                showScanFeedback(err.message, 'danger');
+                render();
+                feedback(`Creato Collo ${activeColloId}`, "success");
             }
-        });
-    }
-
-    // --- GESTIONE STEPPER +/- E "IMPOSTA ATTIVO" (Delegata) ---
-    packingListDiv.addEventListener('click', function (e) {
-        // Cerca il bottone cliccato
-        const adjustButton = e.target.closest('.collo-item-adjust-btn');
-        if (adjustButton && orderStatus === 'In Picking') { // Controlla stato
-            const colloId = parseInt(adjustButton.getAttribute('data-collo-id'));
-            const articleCode = adjustButton.getAttribute('data-article-code');
-            const action = adjustButton.getAttribute('data-action'); // 'add' o 'remove'
-
-            if (!colloId || !articleCode || !action) return;
-
-            // Imposta questo collo come attivo (utile se si clicca +/- su un collo non attivo)
-            if (activeColloId !== colloId) {
-                activeColloId = colloId;
-                updateActiveColloUI();
-                // updatePackingListUI(); // Non serve ridisegnare, lo fa handleItemAdjustment
-            }
-
-            // Chiama la funzione di aggiunta/rimozione (passando l'articleCode)
-            handleItemAdjustment(colloId, articleCode, action, null);
-            return; // Evento gestito
-        }
-
-        // Gestisci click su "Imposta Attivo"
-        const setActiveButton = e.target.closest('.set-active-collo-btn');
-        if (setActiveButton) {
-            activeColloId = parseInt(setActiveButton.getAttribute('data-collo-id'));
-            updateActiveColloUI();
-            updatePackingListUI(); // Ridisegna per mostrare stato attivo
-            if (scannerInput) scannerInput.focus();
-            return; // Evento gestito
-        }
+        } catch(e) { feedback("Errore creazione collo", "danger", true); }
     });
 
-    remainingListDiv.addEventListener('click', function (e) {
-        // Cerca il bottone cliccato
-        const adjustButton = e.target.closest('.collo-item-adjust-btn');
-        if (adjustButton && orderStatus === 'In Picking') { // Controlla stato
+    // Helper Risposte
+    function processApiResponse(data) {
+        if(data.status && (data.status.startsWith('success') || data.status === 'warning_overpick')) {
+            state.packing_list = data.packing_list;
+            state.picked_items = data.picked_items;
+            render();
+            
+            const isWarning = data.status === 'warning_overpick';
+            feedback(data.message, isWarning ? "warning" : "success", isWarning);
+            
+            // Audio Feedback
+            playAudio(isWarning ? 'warn' : 'ok');
+            if(navigator.vibrate) navigator.vibrate(isWarning ? [100, 50, 100] : 100);
 
-            // CONTROLLO FONDAMENTALE: c'è un collo attivo?
-            if (!activeColloId) {
-                showScanFeedback("Errore: Nessun collo attivo. Clicca 'Aggiungi Collo' prima.", 'danger');
-                playBeep('error');
-                return;
-            }
-
-            const articleCode = adjustButton.getAttribute('data-article-code');
-            const action = adjustButton.getAttribute('data-action'); // 'add' o 'remove'
-
-            if (!articleCode || !action) return;
-
-            // Chiama la stessa funzione di prima, usando il collo attivo globale
-            handleItemAdjustment(activeColloId, articleCode, action, null);
-            return; // Evento gestito
-        }
-    });
-
-    // --- FUNZIONE UNIFICATA per Scansione (+) e Stepper (+/-) ---
-    async function handleItemAdjustment(colloId, articleCode, action, barcode = null) {
-        // Blocco scansione se nessun collo è attivo
-        if (!colloId && action === 'add') {
-            showScanFeedback("Errore: Nessun collo attivo. Clicca 'Aggiungi Collo'.", 'danger');
-            playBeep('error');
-            if (scannerInput) { scannerInput.value = ''; scannerInput.focus(); }
-            return;
-        }
-
-        let apiUrl = '';
-        let body = {};
-
-        if (action === 'add') {
-            if (barcode) {
-                // Caso 1: Scansione da scanner (usa il vecchio URL)
-                apiUrl = `${scanApiUrlBase}/collo/${colloId}`;
-                body = JSON.stringify({ barcode: barcode });
-                showScanFeedback(`Scansione ${barcode} in Collo ${colloId}...`, 'info');
-            } else if (articleCode) {
-                // Caso 2: Click su bottone "+" (usa il nuovo URL 'add')
-                // Usiamo la stessa base URL del 'remove'
-                apiUrl = `${removeItemApiUrlBase}/${colloId}/item/add`; // <-- QUESTA È LA CORREZIONE
-                body = JSON.stringify({ article_code: articleCode });
-                showScanFeedback(`Aggiungo 1 pz di ${articleCode} a Collo ${colloId}...`, 'info');
-            } else {
-                return; // Invalido
-            }
-
-        } else if (action === 'remove') {
-            // Caso 3: Click su bottone "-" (era già corretto)
-            apiUrl = `${removeItemApiUrlBase}/${colloId}/item/remove`;
-            body = JSON.stringify({ article_code: articleCode });
-            showScanFeedback(`Rimuovo 1 pz di ${articleCode} da Collo ${colloId}...`, 'info');
         } else {
-            return; // Azione non riconosciuta
-        }
-
-        try {
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                body: body,
-                headers: { 'Content-Type': 'application/json' }
-            });
-
-            if (!response.ok) {
-                let errorMessage = `Errore HTTP ${response.status}: ${response.statusText}`;
-                try { const errData = await response.json(); errorMessage = errData.message || errorMessage; } catch (jsonError) { /* ignore */ }
-                console.error("Errore risposta Fetch:", response.status, response.statusText);
-                throw new Error(errorMessage);
-            }
-
-            const data = await response.json();
-            console.log(`API ${action} Response:`, data);
-
-            // Se l'API risponde con successo (include i nuovi stati)
-            if (data.status && data.status.startsWith('success') || data.status === 'warning_overpick') {
-                // Aggiorna stato locale JS
-                state.packing_list = data.packing_list;
-                state.picked_items = data.picked_items;
-                // Aggiorna entrambe le sezioni UI
-                updatePackingListUI();
-                updateRemainingItemsUI();
-
-                showScanFeedback(data.message, data.status.startsWith('warning') ? 'warning' : 'success');
-                playBeep(data.status.startsWith('warning') ? 'warning' : 'success');
-
-            } else {
-                // Gestione errori JSON (not_found, item_not_in_order, etc.)
-                showScanFeedback(`❌ ${data.message}`, 'danger');
-                playBeep('error');
-            }
-        } catch (err) {
-            console.error(`Fetch Error (Action: ${action}):`, err);
-            showScanFeedback(`Errore: ${err.message}`, 'danger');
-            playBeep('error');
-        } finally {
-            if (scannerInput && barcode) { // Pulisci solo se era una scansione
-                scannerInput.value = '';
-            }
-            if (scannerInput) scannerInput.focus();
+            feedback(data.message || "Errore sconosciuto", "danger", true);
+            playAudio('error');
+            if(navigator.vibrate) navigator.vibrate(500);
         }
     }
 
-    // --- FUNZIONI DI AGGIORNAMENTO UI ---
+    // Helper Feedback Visivo
+    function feedback(msg, type, persistent=false) {
+        scanMessageDiv.textContent = msg;
+        scanMessageDiv.className = `alert alert-${type} py-2 text-center fw-bold mb-2 shadow-sm fixed-top`;
+        scanMessageDiv.style.top = "10px"; 
+        scanMessageDiv.style.left = "10px"; 
+        scanMessageDiv.style.right = "10px";
+        scanMessageDiv.style.zIndex = "2000";
+        scanMessageDiv.style.display = 'block';
 
-    function showScanFeedback(message, type = 'info') {
-        if (!scanMessageDiv) return;
-        scanMessageDiv.textContent = message;
-        scanMessageDiv.className = `mt-2 text-${type}`;
-        if (type === 'success') { scanMessageDiv.style.color = 'var(--success-color)'; }
-        else if (type === 'danger') { scanMessageDiv.style.color = 'var(--danger-color)'; }
-        else if (type === 'warning') { scanMessageDiv.style.color = 'var(--warning-color)'; }
-        else { scanMessageDiv.style.color = 'var(--primary-text-color)'; }
-
-        setTimeout(() => {
-            if (scanMessageDiv.textContent === message) {
-                scanMessageDiv.textContent = '';
-                scanMessageDiv.style.color = '';
-            }
-        }, 5000);
+        if(!persistent) {
+            setTimeout(() => { scanMessageDiv.style.display = 'none'; }, 2000);
+        }
     }
 
-    // Aggiorna il badge "Collo Attivo: X"
-    function updateActiveColloUI() {
-        if (!activeColloDisplay) return;
-        if (activeColloId && orderStatus === 'In Picking') {
-            activeColloDisplay.textContent = `Collo ${activeColloId}`;
-            activeColloDisplay.className = 'badge bg-primary';
-        } else if (orderStatus !== 'In Picking') {
-            activeColloDisplay.textContent = '-';
-            activeColloDisplay.className = 'badge bg-secondary';
+    // Helper Audio (Sintetizzatore semplice per non caricare file mp3)
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playAudio(type) {
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        
+        if (type === 'ok') {
+            osc.frequency.value = 880; // High beep
+            osc.type = 'sine';
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        } else if (type === 'error') {
+            osc.frequency.value = 150; // Low buzz
+            osc.type = 'sawtooth';
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
         } else {
-            activeColloDisplay.textContent = 'Nessuno';
-            activeColloDisplay.className = 'badge bg-secondary';
+            osc.frequency.value = 440; 
+            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
         }
     }
 
-    // Aggiorna la TAB "Rimanenti da Prelevare"
-    function updateRemainingItemsUI() {
-        if (!remainingListDiv) return;
+    // Gestione Tab Filtri
+    let currentView = 'todo'; // 'todo', 'done', 'colli'
+
+    function renderList() {
         remainingListDiv.innerHTML = '';
+        
+        // Ordina: Incompleti prima, poi completati
+        const sortedRows = [...orderRows].sort((a, b) => {
+            // ... (logica di ordinamento invariata) ...
+            const idA = String(a.id_riga);
+            const idB = String(b.id_riga);
+            const pickedA = state.picked_items[idA] || 0;
+            const pickedB = state.picked_items[idB] || 0;
+            
+            let tA = parseFloat(a.nr_colli || 0) * parseFloat(a.quantita || 0);
+            if(tA === 0) tA = parseFloat(a.quantita || 0);
+            let tB = parseFloat(b.nr_colli || 0) * parseFloat(b.quantita || 0);
+            if(tB === 0) tB = parseFloat(b.quantita || 0);
 
-        if (!orderRows || orderRows.length === 0) {
-            remainingListDiv.innerHTML = '<p class="text-center text-muted p-3">Nessun articolo in questo ordine.</p>';
-            return;
-        }
+            const completeA = pickedA >= tA;
+            const completeB = pickedB >= tB;
 
-        orderRows.forEach(item => {
-            const row_id = String(item.id_riga);
-
-            // Calcola qta target (Pezzi Totali) - Logica copiata dal template
-            let nr_colli_val = 0.0;
-            if (item.nr_colli !== null && item.nr_colli !== '') { try { nr_colli_val = parseFloat(String(item.nr_colli).replace(',', '.')); } catch (e) { } }
-            let quantita_per_collo_val = 0.0;
-            if (item.quantita !== null && item.quantita !== '') { try { quantita_per_collo_val = parseFloat(String(item.quantita).replace(',', '.')); } catch (e) { } }
-            let qta_target = (nr_colli_val > 0) ? (nr_colli_val * quantita_per_collo_val) : quantita_per_collo_val;
-            qta_target = Math.round(qta_target);
-
-            // Leggi qta prelevata (Pezzi Totali) dal riepilogo 'state.picked_items'
-            const qta_prelevata = Math.round(parseFloat(state.picked_items ? (state.picked_items[row_id] || 0) : 0));
-            const qta_rimanente = qta_target - qta_prelevata;
-
-            const is_complete = (qta_target > 0 && qta_prelevata >= qta_target);
-
-            // Costruisci HTML riga
-            let rowHTML = `
-                <div class="article-row ${is_complete ? 'picked-complete-simple' : ''}" id="remaining-row-${row_id}">
-                    <div class="article-info">
-                        <p class="article-description">${item.descr_articolo || 'N/D'}</p>
-                        <p class="article-code-simple">Cod: ${item.codice_articolo}</p>
-                        ${(nr_colli_val > 0 && quantita_per_collo_val > 0) ?
-                    `<small class="d-block text-muted">${Math.round(nr_colli_val)} x ${quantita_per_collo_val.toFixed(2)} pz</small>` : ''
-                }
-                    </div>
-                    <div class="remaining-quantity" style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
-    
-    <div>
-        <span class="badge remaining-qty-badge ${is_complete ? 'bg-success' : (qta_prelevata > 0 ? 'bg-warning text-dark' : 'bg-light text-dark')}">
-            <span class="picked-qty">${qta_prelevata}</span> / <span class="ordered-qty">${qta_target}</span>
-        </span>
-        <span class="remaining-unit-label">Pz</span>
-    </div>
-
-    ${(orderStatus === 'In Picking') ? `
-    <div class="collo-item-stepper">
-        <button type="button" class="btn btn-sm btn-outline-danger collo-item-adjust-btn"
-                data-article-code="${item.codice_articolo}"
-                data-action="remove" title="Rimuovi 1 da collo attivo">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-dash-lg" viewBox="0 0 16 16" style="pointer-events: none;">
-                <path fill-rule="evenodd" d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8z"/>
-            </svg>
-        </button>
-        <button type="button" class="btn btn-sm btn-outline-success collo-item-adjust-btn"
-                data-article-code="${item.codice_articolo}"
-                data-action="add" title="Aggiungi 1 a collo attivo">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-plus-lg" viewBox="0 0 16 16" style="pointer-events: none;">
-                <path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/>
-            </svg>
-        </button>
-    </div>
-    ` : `
-    ${(qta_rimanente > 0) ?
-                    `<small class="d-block text-danger fw-bold">Rest: ${qta_rimanente}</small>` :
-                    (is_complete ? `<small class="d-block text-success fw-bold">OK</small>` : '')
-                }
-    `}
-</div>
-                </div>
-            `;
-            remainingListDiv.innerHTML += rowHTML;
+            if (completeA === completeB) return 0;
+            return completeA ? 1 : -1; 
         });
+
+        let visibleCount = 0;
+
+        sortedRows.forEach(row => {
+            const rowId = String(row.id_riga);
+            const picked = state.picked_items[rowId] || 0;
+            
+            let nr = parseFloat(row.nr_colli || 0);
+            let qta = parseFloat(row.quantita || 0);
+            let target = nr > 0 ? (nr * qta) : qta;
+            target = Math.round(target);
+
+            const isComplete = picked >= target;
+
+            // --- NUOVA LOGICA DI FILTRO ---
+            // Se siamo in vista 'todo' e l'articolo è completo, saltalo
+            if (currentView === 'todo' && isComplete) return;
+            // Se siamo in vista 'done' e l'articolo NON è completo, saltalo
+            if (currentView === 'done' && !isComplete) return;
+            // -----------------------------
+
+            visibleCount++;
+
+            // HTML CARD (Invariato)
+            const cardHtml = `
+            <div class="pda-item-card ${isComplete ? 'completed' : ''}" id="row-${rowId}">
+                <div class="item-grid">
+                    <div>
+                        <div class="font-mono text-muted small">${row.codice_articolo}</div>
+                        <div class="fw-bold text-dark" style="line-height:1.2;">${row.descr_articolo}</div>
+                        ${row.cod_alternativo && row.cod_alternativo !== 'N/D' ? `<div class="badge bg-light text-dark border mt-1 font-mono">EAN: ${row.cod_alternativo}</div>` : ''}
+                    </div>
+                    <div class="text-end">
+                        <div class="d-flex align-items-center justify-content-end gap-2">
+                             <span class="big-qty ${isComplete ? 'text-success' : 'text-danger'}">${picked}</span>
+                             <span class="text-muted" style="font-size:1.2rem;">/</span>
+                             <span class="big-qty text-dark">${target}</span>
+                        </div>
+                        <small class="text-muted font-mono">PZ</small>
+                    </div>
+                </div>
+
+                ${state.status === 'In Picking' ? `
+                <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+                    <button class="btn btn-outline-danger stepper-btn" 
+                            onclick="manualAdjust('${row.codice_articolo}', 'remove')">
+                        −
+                    </button>
+                    <span class="small text-muted text-uppercase fw-bold">Manuale</span>
+                    <button class="btn btn-outline-success stepper-btn" 
+                            onclick="manualAdjust('${row.codice_articolo}', 'add')">
+                        +
+                    </button>
+                </div>
+                ` : ''}
+            </div>
+            `;
+            remainingListDiv.insertAdjacentHTML('beforeend', cardHtml);
+        });
+
+        // Feedback se la lista è vuota per il filtro corrente
+        if (visibleCount === 0) {
+            let msg = 'Nessun articolo.';
+            if (currentView === 'todo') msg = 'Tutto completato! 🎉';
+            if (currentView === 'done') msg = 'Nessun articolo completato.';
+            remainingListDiv.innerHTML = `<div class="text-center p-5 text-muted fw-bold">${msg}</div>`;
+        }
     }
 
-    // Aggiorna la TAB "Packing List (Colli)"
-    function updatePackingListUI() {
-        if (!packingListDiv) return;
-        packingListDiv.innerHTML = '';
+    // Gestione Tab Filtri Aggiornata
+    window.filterView = function(view) {
+        currentView = view;
 
-        if (colliTotaliInput) colliTotaliInput.value = state.packing_list.length;
-        if (!state.packing_list || state.packing_list.length === 0) {
-            packingListDiv.innerHTML = '<p class="text-center text-muted p-3">Clicca "Aggiungi Collo" per iniziare.</p>';
-            return;
-        }
-
-        const sortedPackingList = [...state.packing_list].sort((a, b) => a.collo_id - b.collo_id);
-
-        sortedPackingList.forEach(collo => {
-            const collo_id = collo.collo_id;
-            const items = collo.items || {};
-            const isActive = (collo_id === activeColloId);
-
-            let itemsHTML = '';
-            if (Object.keys(items).length === 0) {
-                itemsHTML = '<li class="collo-item text-muted">(Collo vuoto)</li>';
-            } else {
-                const sortedItems = Object.entries(items).sort((a, b) => a[0].localeCompare(b[0]));
-
-                for (const [articleCode, qta] of sortedItems) {
-                    const itemInfo = orderRows.find(r => r.codice_articolo === articleCode);
-                    const desc = itemInfo ? itemInfo.descr_articolo : 'Articolo Sconosciuto';
-
-                    // --- HTML MODIFICATO CON STEPPER ---
-                    itemsHTML += `
-                        <li class="collo-item">
-                            <div class="collo-item-details">
-                                <span class="collo-item-desc">${desc}</span>
-                                <small class="collo-item-code d-block">Cod: ${articleCode}</small>
-                            </div>
-                            
-                            ${(orderStatus === 'In Picking') ? `
-                            <div class="collo-item-stepper">
-                                <button type="button" class="btn btn-sm btn-outline-danger collo-item-adjust-btn"
-                                        data-collo-id="${collo_id}"
-                                        data-article-code="${articleCode}"
-                                        data-action="remove" title="Rimuovi 1">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-dash-lg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M2 8a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11A.5.5 0 0 1 2 8z"/></svg>
-                                </button>
-                                <span class="collo-item-qty">${Math.round(qta)}</span>
-                                <button type="button" class="btn btn-sm btn-outline-success collo-item-adjust-btn"
-                                        data-collo-id="${collo_id}"
-                                        data-article-code="${articleCode}"
-                                        data-action="add" title="Aggiungi 1">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-plus-lg" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/></svg>
-                                </button>
-                            </div>
-                            ` : `
-                            <div class="collo-item-qty-static">
-                                 ${Math.round(qta)} pz
-                            </div>
-                            `}
-                        </li>
-                    `;
-                    // --- FINE HTML MODIFICATO ---
-                }
+        // 1. Aggiorna stile bottoni
+        // Selezioniamo i bottoni tramite la loro posizione o testo, o meglio aggiungiamo ID nell'HTML.
+        // Dato che non abbiamo ID, usiamo i selettori CSS basati sull'ordine o onclick
+        const buttons = document.querySelectorAll('.d-flex.mb-3.gap-2 button');
+        buttons.forEach(btn => {
+            // Rimuovi stile attivo da tutti
+            btn.classList.remove('btn-dark', 'active');
+            btn.classList.add('btn-outline-secondary');
+            
+            // Aggiungi stile attivo a quello cliccato
+            if (btn.getAttribute('onclick').includes(`'${view}'`)) {
+                btn.classList.remove('btn-outline-secondary');
+                btn.classList.add('btn-dark', 'active');
             }
-
-            const setColloActiveBtn = (orderStatus === 'In Picking' && !isActive) ?
-                `<button class="btn btn-sm btn-outline-primary set-active-collo-btn" data-collo-id="${collo_id}">Imposta Attivo</button>` : '';
-
-            let colloHTML = `
-                <div class="collo-container mb-2">
-                    <div class="collo-header ${isActive ? 'active' : ''}">
-                        <span>Collo ${collo_id}</span>
-                        ${setColloActiveBtn}
-                    </div>
-                    <ul class="collo-item-list list-group list-group-flush">
-                        ${itemsHTML}
-                    </ul>
-                </div>
-            `;
-            packingListDiv.innerHTML += colloHTML;
         });
 
-        // (Spostato il listener fuori da questa funzione, vedi sopra)
-    }
-
-    // Assicurati che gli stili Bootstrap base (come btn-sm, form-control-sm) siano definiti
-    // (Sono già nel blocco <style> sopra)
-
+        // 2. Gestione visibilità contenitori
+        if(view === 'todo' || view === 'done') {
+            remainingListDiv.classList.remove('d-none');
+            packingListDiv.classList.add('d-none');
+            renderList(); // Ridisegna applicando il filtro
+        } else if (view === 'colli') {
+            remainingListDiv.classList.add('d-none');
+            packingListDiv.classList.remove('d-none');
+        }
+    };
+    render();
 });
 </script>
-{% endblock %}
 {% endblock %}

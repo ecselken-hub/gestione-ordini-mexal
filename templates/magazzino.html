@@ -8,15 +8,14 @@
 </div>
 
 {# Form di ricerca invariato #}
-<div class="card" style="margin-bottom: 1.5rem;">
-    <div class="card-body" style="padding: 1rem;">
-        <form method="GET" action="{{ url_for('magazzino') }}">
-            <div style="display: flex; gap: 1rem;">
-                <input type="search" class="form-control" id="q" name="q" value="{{ query or '' }}" placeholder="Cerca per descrizione..." style="padding: 12px 15px;">
-                <button type="submit" class="btn btn-primary">Cerca</button>
-            </div>
-        </form>
-    </div>
+<div class="sticky-top bg-white p-2 shadow-sm" style="top:0; z-index:100;">
+    <form method="GET" action="{{ url_for('magazzino') }}" class="d-flex gap-2">
+        <input type="search" class="form-control form-control-lg fw-bold" 
+               id="q" name="q" value="{{ query or '' }}" 
+               placeholder="🔍 Scansiona/Cerca..." 
+               inputmode="search" autofocus>
+        <button type="submit" class="btn btn-primary btn-lg">Vai</button>
+    </form>
 </div>
 
 {# Area per messaggi di feedback aggiornamento (Globale) #}

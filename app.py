@@ -1774,6 +1774,35 @@ def remove_item_from_collo(sigla, serie, numero, collo_id):
         print(f"ERRORE [remove_item] per {order_key}: {e}")
         return jsonify({'status': 'error', 'message': f'Errore server: {e}'}), 500
 
+def _upload_to_dropbox(file_bytes, filename):
+    """
+    Funzione helper per caricare un file PDF (in bytes) su Dropbox.
+    Richiede la libreria 'dropbox' e la variabile globale DROPBOX_TOKEN.
+    """
+    if not DROPBOX_TOKEN:
+        print("ERRORE: DROPBOX_TOKEN non configurato nel file .env o nelle variabili d'ambiente.")
+        return False, "Token Dropbox non configurato."
+
+    try:
+        # Inizializza client Dropbox
+        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+        
+        # Definisci il percorso remoto (root di Dropbox + filename)
+        dropbox_path = f"/{filename}"
+        
+        # Esegui l'upload (WriteMode.overwrite sovrascrive se esiste già un file con lo stesso nome)
+        dbx.files_upload(file_bytes, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+        
+        print(f"DEBUG [_upload_to_dropbox]: Upload riuscito per {filename}")
+        return True, "Upload completato con successo."
+        
+    except dropbox.exceptions.AuthError:
+        print("ERRORE [_upload_to_dropbox]: Token Dropbox non valido o scaduto.")
+        return False, "Autenticazione Dropbox fallita."
+    except Exception as e:
+        print(f"ERRORE [_upload_to_dropbox]: {e}")
+        return False, f"Errore upload: {str(e)}"
+
 # --- Azioni Ordine (Rifattorizzato per DB) ---
 @app.route('/order/<sigla>/<serie>/<numero>/action', methods=['POST'])
 @login_required
